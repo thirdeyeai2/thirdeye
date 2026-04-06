@@ -1,1 +1,1 @@
-worker: python mybot.py
+worker: python mv god_vc_bot.py mybot.py
