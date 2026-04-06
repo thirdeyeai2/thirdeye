@@ -37,7 +37,7 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def panel():
     status = "🟢 ENABLED" if get_status() else "🔴 DISABLED"
     text = f"""
-👁️ <b>Third Eye 2.0</b>
+👁️ <b>Third Eye 3.0</b>
 
 ⚙️ VC Protection: {status}
 🚫 Auto-mute Non-members
