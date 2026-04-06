@@ -52,12 +52,12 @@ async def vc(client, update, users, chats):
         if hasattr(update, "participants"):
 
             for gid in GROUPS:
-    try:
-        chat = await client.get_chat(gid)  # works with username
-        gid = chat.id
-    except Exception as e:
-        print("❌ Cannot access group:", gid, e)
-        continue
+                try:
+                    chat = await client.get_chat(gid)  # username → id
+                    gid = chat.id
+                except Exception as e:
+                    print("❌ Cannot access group:", gid, e)
+                    continue
 
                 actions = []
 
