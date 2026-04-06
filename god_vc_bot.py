@@ -175,7 +175,7 @@ async def vc(client, update, users, chats):
 # ===== RUN EVERYTHING =====
 async def main():
     await vc_app.start()
-    print("🔥 GOD VC ENGINE RUNNING (Bot Token Mode)")
+    print("🔥 🔥 GOD VC ENGINE RUNNING (Bot Token Mode)")
     await app.run_polling()
 
 asyncio.run(main())
