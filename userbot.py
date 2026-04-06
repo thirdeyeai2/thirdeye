@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 import time
@@ -6,7 +7,12 @@ from pyrogram import Client
 from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall, EditGroupCallParticipant
 from config import API_ID, API_HASH, GROUPS
 
-app = Client("vc_god", api_id=API_ID, api_hash=API_HASH)
+app = Client(
+    "vc_god",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=os.getenv("SESSION_STRING")
+)
 
 LAST = 0
 COOLDOWN = 2
