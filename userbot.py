@@ -1,131 +1,117 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
-from config import BOT_TOKEN
 import json
-from io import BytesIO
-import logging
+import asyncio
+import time
+from collections import defaultdict
+from pyrogram import Client
+from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall, EditGroupCallParticipant
+from config import API_ID, API_HASH, GROUPS
 
-# ===== LOGGING =====
-logging.basicConfig(level=logging.INFO)
+app = Client("vc_god", api_id=API_ID, api_hash=API_HASH)
 
-# ===== STATUS =====
-def get_status():
-    try:
-        with open("status.json") as f:
-            return json.load(f).get("vc", False)
-    except:
-        return False
+LAST = 0
+COOLDOWN = 2
+MIC_TRACK = defaultdict(list)
 
-def set_status(v: bool):
-    with open("status.json", "w") as f:
-        json.dump({"vc": v}, f)
+BAD_WORDS = ["porn", "sex", "xxx", "nude"]
 
-# ===== ADMIN CHECK =====
-async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.effective_user.id
-        chat_id = update.effective_chat.id
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        return member.status in ["administrator", "creator"]
-    except Exception as e:
-        logging.error(f"Admin check failed: {e}")
-        return False
+def is_enabled():
+    with open("status.json") as f:
+        return json.load(f)["vc"]
 
-# ===== PANEL =====
-def panel():
-    status = "🟢 ENABLED" if get_status() else "🔴 DISABLED"
-    text = f"""
-👁️ <b>Third Eye 2.0</b>
+# ===== BAD WORD FILTER =====
+@app.on_message()
+async def filter_msg(client, msg):
+    if not msg.text:
+        return
 
-⚙️ VC Protection: {status}
+    text = msg.text.lower()
 
-🚫 Auto-mute Non-members
-🚫 Auto-mute Channel Accounts
-🚫 Auto-mute Video Users
-
-🧠 Anti Spam Active
-📡 Monitoring Live
-"""
-
-    buttons = [
-        [
-            InlineKeyboardButton("✅ ENABLE", callback_data="on"),
-            InlineKeyboardButton("❌ DISABLE", callback_data="off")
-        ],
-        [
-            InlineKeyboardButton("🔄 REFRESH", callback_data="refresh"),
-            InlineKeyboardButton("📄 SEND FILE", callback_data="send_file")
-        ]
-    ]
-
-    return text, InlineKeyboardMarkup(buttons)
-
-# ===== START COMMAND =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text, btn = panel()
-        await update.message.reply_text(text, reply_markup=btn, parse_mode="HTML")
-    except Exception as e:
-        logging.error(f"Start command failed: {e}")
-
-# ===== BUTTON HANDLER =====
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-
-    try:
-        await q.answer(show_alert=False)
-
-        if not await is_admin(update, context):
-            await q.answer("Admins only ❌", show_alert=True)
-            return
-
-        if q.data == "on":
-            set_status(True)
-            await q.answer("VC Enabled ✅", show_alert=True)
-        elif q.data == "off":
-            set_status(False)
-            await q.answer("VC Disabled ❌", show_alert=True)
-        elif q.data == "refresh":
-            await q.answer("Panel refreshed 🔄", show_alert=True)
-        elif q.data == "send_file":
-            file_bytes = b"Hello! This is your file from the bot."
-            file_like = BytesIO(file_bytes)
-            file_like.name = "example.txt"
+    for w in BAD_WORDS:
+        if w in text:
             try:
-                await context.bot.send_document(chat_id=q.message.chat.id, document=file_like, filename="example.txt")
-                await q.answer("File sent ✅", show_alert=True)
-            except Exception as e:
-                logging.error(f"Send file failed: {e}")
-                await q.answer("Failed to send file ❌", show_alert=True)
-            return
+                await client.kick_chat_member(msg.chat.id, msg.from_user.id)
+            except:
+                pass
 
-        text, btn = panel()
-        await q.edit_message_text(text, reply_markup=btn, parse_mode="HTML")
+# ===== VC CONTROL =====
+@app.on_raw_update()
+async def vc(client, update, users, chats):
 
-    except Exception as e:
-        logging.error(f"Button handler error: {e}")
-        try:
-            await q.answer("Something went wrong ❌", show_alert=True)
-        except:
-            pass
+    global LAST
 
-# ===== RUN BOT =====
-async def main():
-    # Delete any existing webhook to prevent 409 Conflict
+    if not is_enabled():
+        return
+
     try:
-        bot = Bot(BOT_TOKEN)
-        await bot.delete_webhook()
-        logging.info("Webhook deleted ✅")
+        if hasattr(update, "participants"):
+
+            for gid in GROUPS:
+
+                actions = []
+
+                for p in update.participants:
+
+                    if not hasattr(p.peer, "user_id"):
+                        continue
+
+                    uid = p.peer.user_id
+
+                    try:
+                        m = await client.get_chat_member(gid, uid)
+                        role = m.status
+                    except:
+                        role = "none"
+
+                    if role in ["administrator", "creator"]:
+                        continue
+
+                    mute = False
+
+                    if role != "member":
+                        mute = True
+
+                    if hasattr(p.peer, "channel_id"):
+                        mute = True
+
+                    if hasattr(p, "video") and p.video:
+                        mute = True
+
+                    # mic spam
+                    now = time.time()
+                    MIC_TRACK[uid].append(now)
+                    MIC_TRACK[uid] = [t for t in MIC_TRACK[uid] if now - t < 5]
+
+                    if len(MIC_TRACK[uid]) > 5:
+                        mute = True
+
+                    actions.append((p.peer, mute))
+
+                if actions and time.time() - LAST > COOLDOWN:
+
+                    LAST = time.time()
+
+                    await client.invoke(
+                        JoinGroupCall(
+                            call=update.call,
+                            join_as=await client.resolve_peer("me"),
+                            params=b'{"muted": true}'
+                        )
+                    )
+
+                    for peer, mute in actions:
+                        await client.invoke(
+                            EditGroupCallParticipant(
+                                call=update.call,
+                                participant=peer,
+                                muted=mute
+                            )
+                        )
+
+                    await asyncio.sleep(0.3)
+                    await client.invoke(LeaveGroupCall(call=update.call))
+
     except Exception as e:
-        logging.error(f"Failed to delete webhook: {e}")
+        print(e)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-
-    print("🤖 UI BOT RUNNING")
-    await app.run_polling()
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+print("🔥 GOD VC ENGINE RUNNING")
+app.run()
