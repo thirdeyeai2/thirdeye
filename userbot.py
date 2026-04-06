@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from config import BOT_TOKEN
 import json
@@ -10,7 +10,6 @@ logging.basicConfig(level=logging.INFO)
 
 # ===== STATUS =====
 def get_status():
-    """Read VC status from status.json"""
     try:
         with open("status.json") as f:
             return json.load(f).get("vc", False)
@@ -18,7 +17,6 @@ def get_status():
         return False
 
 def set_status(v: bool):
-    """Save VC status to status.json"""
     with open("status.json", "w") as f:
         json.dump({"vc": v}, f)
 
@@ -75,15 +73,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
 
     try:
-        # Respond immediately to avoid "Query too old"
         await q.answer(show_alert=False)
 
-        # Admin check
         if not await is_admin(update, context):
             await q.answer("Admins only ❌", show_alert=True)
             return
 
-        # Handle button actions
         if q.data == "on":
             set_status(True)
             await q.answer("VC Enabled ✅", show_alert=True)
@@ -93,19 +88,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif q.data == "refresh":
             await q.answer("Panel refreshed 🔄", show_alert=True)
         elif q.data == "send_file":
-            # Safe file sending
             file_bytes = b"Hello! This is your file from the bot."
             file_like = BytesIO(file_bytes)
-            file_like.name = "example.txt"  # required for Telegram
+            file_like.name = "example.txt"
             try:
                 await context.bot.send_document(chat_id=q.message.chat.id, document=file_like, filename="example.txt")
                 await q.answer("File sent ✅", show_alert=True)
             except Exception as e:
                 logging.error(f"Send file failed: {e}")
                 await q.answer("Failed to send file ❌", show_alert=True)
-            return  # skip panel refresh for file
+            return
 
-        # Always refresh panel after any change
         text, btn = panel()
         await q.edit_message_text(text, reply_markup=btn, parse_mode="HTML")
 
@@ -117,9 +110,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ===== RUN BOT =====
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
+async def main():
+    # Delete any existing webhook to prevent 409 Conflict
+    try:
+        bot = Bot(BOT_TOKEN)
+        await bot.delete_webhook()
+        logging.info("Webhook deleted ✅")
+    except Exception as e:
+        logging.error(f"Failed to delete webhook: {e}")
 
-print("🤖 UI BOT RUNNING")
-app.run_polling()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+
+    print("🤖 UI BOT RUNNING")
+    await app.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
