@@ -10,10 +10,10 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-VC_CHECK_INTERVAL = 1  # ultra-fast monitoring
+VC_CHECK_INTERVAL = 0.5  # ultra-fast monitoring
 # ================================================
 
-# Force UTC timezone (fix for Railway/Termux time issues)
+# Force UTC timezone
 os.environ['TZ'] = 'UTC'
 time.tzset()
 
@@ -25,12 +25,21 @@ app = Client(
     session_string=SESSION_STRING
 )
 
-# Track muted users for auto-unmute
 muted_users = set()
+
+# ----------------- TIME SYNC -------------------
+async def force_time_sync():
+    """Force Pyrogram to sync session time with Telegram."""
+    while True:
+        try:
+            ts = int(datetime.utcnow().timestamp() * 1000)
+            await app.send(functions.Ping(ping_id=ts))
+            return
+        except Exception:
+            await asyncio.sleep(0.5)  # retry fast
 
 # ----------------- MUTE FUNCTION ----------------
 async def mute_participant(call, user_id, mute=True):
-    """Mute/unmute a user in VC"""
     try:
         await app.send(
             functions.phone.ToggleGroupCallParticipant(
@@ -39,32 +48,23 @@ async def mute_participant(call, user_id, mute=True):
                 muted=mute
             )
         )
-        print(f"{'Muted' if mute else 'Unmuted'} user {user_id}")
+        print(f"{'Muted' if mute else 'Unmuted'} {user_id}")
     except Exception as e:
         print(f"Error muting {user_id}: {e}")
 
-# ----------------- GHOST VC MONITOR ------------------
-async def monitor_vc():
+# ----------------- SUPER GHOST VC -----------------
+async def ghost_vc_controller():
     await app.start()
-    print("⏳ Starting Telegram time sync...")
-
-    # Keep sending ping until Telegram accepts it (fixes [16])
-    synced = False
-    while not synced:
-        try:
-            ts = int(datetime.utcnow().timestamp() * 1000)
-            await app.send(functions.Ping(ping_id=ts))
-            synced = True
-            print("⏱️ Time synced successfully with Telegram!")
-        except Exception as e:
-            print(f"⚠️ Ping failed, retrying in 1s: {e}")
-            await asyncio.sleep(1)
-
-    print("🚀 Ghost VC Controller Running in Ultra Invisible Mode...")
+    print("⏳ Syncing time with Telegram...")
+    await force_time_sync()
+    print("⏱️ Time synced! Ghost VC running...")
 
     while True:
         try:
-            # Get group call info
+            # Keep time synced to avoid [16]
+            await force_time_sync()
+
+            # Fetch VC participants
             group_call = await app.send(
                 functions.phone.GetGroupCallRequest(
                     peer=types.InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
@@ -78,27 +78,27 @@ async def monitor_vc():
                 user = await app.get_users(user_id)
                 member_status = await app.get_chat_member(GROUP_ID, user_id)
 
-                # 1️⃣ Admin exemption
+                # Skip admins
                 if member_status.status in ["administrator", "creator"]:
                     continue
 
-                # 2️⃣ Auto-mute bots, channels, non-members, or video
+                # Auto-mute bots, non-members, or video users
                 if user.is_bot or not member_status.is_member or getattr(p, "video", False):
                     if user_id not in muted_users:
                         await mute_participant(group_call, user_id, True)
                         muted_users.add(user_id)
                     continue
 
-                # 3️⃣ Auto unmute if previously muted and now member
+                # Auto-unmute if previously muted and now member
                 if user_id in muted_users and member_status.is_member:
                     await mute_participant(group_call, user_id, False)
                     muted_users.remove(user_id)
 
         except Exception as e:
-            print(f"⚠️ Error in VC loop: {e}")
+            print(f"⚠️ VC loop error: {e}")
 
         await asyncio.sleep(VC_CHECK_INTERVAL)
 
 # ----------------- RUN -------------------------
 if __name__ == "__main__":
-    asyncio.run(monitor_vc())
+    asyncio.run(ghost_vc_controller())
