@@ -1,86 +1,83 @@
-import os
 import asyncio
-from pyrogram import Client
-from pyrogram.raw.functions.phone import GetGroupCall, DiscardGroupCall
-from pyrogram.raw.functions.channels import GetParticipant
-from pyrogram.raw.types import InputPeerUser
+from pyrogram import Client, enums
+from pyrogram.raw import functions, types
+from datetime import datetime
 
-# ================= VARIABLES =================
-API_ID = int(os.getenv("API_ID"))         # Your Telegram API ID
-API_HASH = os.getenv("API_HASH")         # Your Telegram API HASH
-SESSION = os.getenv("SESSION")           # Userbot session string
-GROUP_ID = int(os.getenv("GROUP_ID"))    # Group ID to monitor VC
-LOOP_DELAY = 2  # Seconds between checks
+# ==================== CONFIG ====================
+API_ID = int("YOUR_API_ID")
+API_HASH = "YOUR_API_HASH")
+SESSION_STRING = "YOUR_SESSION_STRING"
+GROUP_ID = -1001234567890  # Your group ID
+VC_CHECK_INTERVAL = 2  # Check every 2 seconds
+# ================================================
 
-# ================= CLIENT =================
-app = Client(SESSION, api_id=API_ID, api_hash=API_HASH, in_memory=True)
+app = Client(
+    "vcghost",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
+)
 
-# ================= UTILITY FUNCTIONS =================
-async def is_admin(user_id):
+async def sync_time():
+    """Fix [16] msg_id too low by syncing time with Telegram."""
+    await app.send(functions.Ping(ping_id=int(datetime.now().timestamp() * 1000)))
+
+async def mute_participant(call, user_id, mute=True):
+    """Mute/unmute a user in VC"""
     try:
-        participant = await app.invoke(GetParticipant(channel=GROUP_ID, user_id=user_id))
-        role = participant.participant
-        return getattr(role, "admin_rights", None) is not None
-    except:
-        return False
-
-async def mute_user(user_id):
-    try:
-        await app.invoke(DiscardGroupCall(call=InputPeerUser(user_id=user_id, access_hash=0), schedule_date=None))
-        print(f"[MUTED] User ID: {user_id}")
+        await app.send(
+            functions.phone.ToggleGroupCallParticipant(
+                call=call,
+                participant=user_id,
+                muted=mute
+            )
+        )
+        print(f"{'Muted' if mute else 'Unmuted'} user {user_id}")
     except Exception as e:
-        print(f"[MUTE ERROR] {user_id}: {e}")
+        print(f"Error muting {user_id}: {e}")
 
-async def unmute_user(user_id):
-    # Auto-unmute logic: invite back or allow to speak
-    print(f"[UNMUTED] User ID: {user_id}")
-
-async def check_group_membership(user_id):
-    # Check if user is now a member of the group
-    try:
-        participant = await app.get_chat_member(GROUP_ID, user_id)
-        return participant.status != "left"
-    except:
-        return False
-
-# ================= MONITOR VC =================
 async def monitor_vc():
-    async with app:
-        print("🚀 MEGA VC GHOST SYSTEM RUNNING")
-        while True:
-            try:
-                call = await app.invoke(GetGroupCall(peer=GROUP_ID))
-                participants = call.participants
+    await app.start()
+    await sync_time()
+    print("🚀 VC Ghost Controller Running...")
 
-                for user in participants:
-                    user_id = user.user_id
+    while True:
+        try:
+            # Get group call
+            group_call = await app.send(
+                functions.phone.GetGroupCallRequest(
+                    peer=types.InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
+                    limit=100
+                )
+            )
 
-                    # Skip admins
-                    if await is_admin(user_id):
-                        continue
+            participants = group_call.participants
 
-                    # Always mute channels
-                    if getattr(user, "is_channel", False):
-                        await mute_user(user_id)
-                        continue
+            for p in participants:
+                user_id = p.user_id
 
-                    # Non-member auto-mute
-                    if not getattr(user, "is_member", True):
-                        await mute_user(user_id)
-                        # If user joins group later → unmute
-                        if await check_group_membership(user_id):
-                            await unmute_user(user_id)
-                        continue
+                # Fetch user info
+                user = await app.get_users(user_id)
 
-                    # Video detection mute
-                    if getattr(user, "video_enabled", False):
-                        await mute_user(user_id)
+                # Admin exemption
+                member_status = await app.get_chat_member(GROUP_ID, user_id)
+                if member_status.status in ["administrator", "creator"]:
+                    continue
 
-            except Exception as e:
-                print("[VC ERROR]", e)
+                # Channel / bot / non-member auto-mute
+                if user.is_bot or not member_status.is_member:
+                    await mute_participant(group_call, user_id, True)
+                    continue
 
-            await asyncio.sleep(LOOP_DELAY)
+                # Video detection mute
+                if getattr(p, "video", False):
+                    await mute_participant(group_call, user_id, True)
 
-# ================= RUN =================
-if __name__ == "__main__":
-    asyncio.run(monitor_vc())
+            await asyncio.sleep(VC_CHECK_INTERVAL)
+
+        except Exception as e:
+            print(f"Error: {e}")
+            await asyncio.sleep(VC_CHECK_INTERVAL)
+
+# ========== Run ==========
+asyncio.run(monitor_vc())
