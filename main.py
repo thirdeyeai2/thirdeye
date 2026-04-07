@@ -1,150 +1,56 @@
-import asyncio
 import os
-import time
+import asyncio
+from telethon import TelegramClient, events
+from telethon.tl.types import InputPeerChannel
 
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.tl.functions.phone import GetGroupCallRequest, ToggleGroupCallParticipant
-from telethon.tl.types import InputPeerUser
-
-from pyrogram import Client, enums
-from pyrogram.types import ChatPermissions
-
-# ================= CONFIG =================
-
+# ===== ENV VARIABLES =====
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-SESSION = os.getenv("SESSION")  # Userbot string session
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Optional, for auto-unmute
+SESSION_NAME = os.getenv("SESSION_NAME", "elite_userbot")
+VC_CHANNELS = [int(ch) for ch in os.getenv("VC_CHANNELS", "").split(",") if ch]
+GHOST_CHECK_INTERVAL = int(os.getenv("GHOST_CHECK_INTERVAL", 3))  # seconds
 
-# Replace with your target groups
-PROTECTED_GROUPS = {
-    -1001747095956: True,
-}
+# ===== TELETHON CLIENT =====
+client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
-COOLDOWN = 5  # seconds
-
-# ================= CLIENTS =================
-
-userbot = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
-bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# ================= GLOBALS =================
-
-FLAGGED_USERS = {}
-LAST_ACTION = {}
-
-# ================= AUTO UNMUTE =================
-
-@bot.on_chat_member_updated()
-async def auto_unmute(_, update):
-    chat_id = update.chat.id
-    user = update.new_chat_member.user
-    if not user:
-        return
-
-    user_id = user.id
-    if user_id in FLAGGED_USERS.get(chat_id, set()):
-        try:
-            await bot.restrict_chat_member(
-                chat_id,
-                user_id,
-                ChatPermissions(
-                    can_send_messages=True,
-                    can_send_media_messages=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True
-                )
-            )
-            FLAGGED_USERS[chat_id].remove(user_id)
-            print(f"✅ Auto-unmuted {user_id}")
-        except Exception as e:
-            print("Unmute error:", e)
-
-# ================= VC SCANNER =================
-
-async def vc_scanner():
-    await userbot.start()
-    print("👻 Userbot started (Elite VC scanner active)")
-
+async def ghost_vc_monitor(channel_id):
+    """Join VC invisibly & mute violators"""
     while True:
-        for chat_id, enabled in PROTECTED_GROUPS.items():
-            if not enabled:
-                continue
-            try:
-                entity = await userbot.get_entity(chat_id)
-                if not getattr(entity, "call", None):
-                    continue
+        try:
+            # Join VC in invisible mode (silent join)
+            await client(functions.phone.JoinGroupCallRequest(
+                peer=InputPeerChannel(channel_id, 0),
+                join_as=list(),  # empty = invisible
+                muted=True
+            ))
 
-                call = await userbot(GetGroupCallRequest(call=entity.call))
-                for p in call.participants:
-                    if not hasattr(p, "peer"):
-                        continue
+            print(f"👻 Ghost joined VC {channel_id} silently")
 
-                    now = time.time()
+            # Monitor participants
+            @client.on(events.Raw)
+            async def handle_vc_event(event):
+                for p in getattr(event, 'participants', []):
+                    # Auto-mute non-members or video-on
+                    if not getattr(p, 'is_member', False) or getattr(p, 'video', False):
+                        await client(functions.phone.ToggleGroupCallParticipantRequest(
+                            call=event.call,
+                            participant=p.user_id,
+                            muted=True
+                        ))
+                        print(f"🔕 Muted {p.user_id} in {channel_id}")
 
-                    # Channel detection
-                    if not hasattr(p.peer, "user_id"):
-                        if now - LAST_ACTION.get(chat_id, 0) > COOLDOWN:
-                            LAST_ACTION[chat_id] = now
-                            print("⚠️ Channel detected in VC")
-                        continue
-
-                    user_id = p.peer.user_id
-
-                    # Non-member handling
-                    try:
-                        member = await bot.get_chat_member(chat_id, user_id)
-                        is_member = True
-                    except:
-                        is_member = False
-
-                    if not is_member:
-                        FLAGGED_USERS.setdefault(chat_id, set()).add(user_id)
-                        if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
-                            LAST_ACTION[user_id] = now
-                            try:
-                                await userbot(ToggleGroupCallParticipant(
-                                    call=entity.call,
-                                    participant=InputPeerUser(user_id, 0),
-                                    muted=True
-                                ))
-                                print(f"🚫 Muted non-member {user_id} in VC")
-                            except Exception as e:
-                                print("Mute non-member error:", e)
-                        continue
-
-                    # Keep flagged users muted
-                    if user_id in FLAGGED_USERS.get(chat_id, set()):
-                        continue
-
-                    # Video detection mute
-                    if getattr(p, "video", False):
-                        if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-                            continue
-                        if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
-                            LAST_ACTION[user_id] = now
-                            try:
-                                await userbot(ToggleGroupCallParticipant(
-                                    call=entity.call,
-                                    participant=InputPeerUser(user_id, 0),
-                                    muted=True
-                                ))
-                                print(f"📹 Muted video user {user_id}")
-                            except Exception as e:
-                                print("Video mute error:", e)
-
-            except Exception as e:
-                print("VC scanner error:", e)
-
-        await asyncio.sleep(1)
-
-# ================= START =================
+            await asyncio.sleep(GHOST_CHECK_INTERVAL)
+        except Exception as e:
+            print(f"⚠ Error in VC {channel_id}: {e}")
+            await asyncio.sleep(5)
 
 async def main():
-    await bot.start()
-    print("🤖 Bot started")
-    await vc_scanner()
+    await client.start()
+    print("✅ Elite Ghost VC Userbot running (Invisible Mode)")
+
+    # Launch ghost monitors for all channels
+    tasks = [ghost_vc_monitor(ch) for ch in VC_CHANNELS]
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())
