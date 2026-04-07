@@ -4,6 +4,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.phone import (
     GetGroupCallRequest,
+    GetGroupCallParticipantsRequest,
     EditGroupCallParticipantRequest,
     JoinGroupCallRequest
 )
@@ -16,7 +17,7 @@ API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("TARGET_GROUP"))
 
-CHECK_DELAY = 1  # seconds
+CHECK_DELAY = 1
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -45,7 +46,7 @@ async def vc_mute(call, user_id):
             muted=True
         ))
         muted_cache.add(user_id)
-        print(f"[VC MUTED] {user_id}")
+        print(f"[MUTED] {user_id}")
     except Exception as e:
         print(f"[MUTE ERROR] {e}")
 
@@ -57,60 +58,17 @@ async def vc_unmute(call, user_id):
             muted=False
         ))
         muted_cache.discard(user_id)
-        print(f"[VC UNMUTED] {user_id}")
+        print(f"[UNMUTED] {user_id}")
     except Exception as e:
         print(f"[UNMUTE ERROR] {e}")
 
-# ===== MAIN LOOP =====
-async def monitor():
-    print("🚀 MEGA VC GHOST SYSTEM RUNNING")
-
-    while True:
-        try:
-            data = await client(GetGroupCallRequest(GROUP_ID))
-            call = data.call
-
-            participants = data.participants
-
-            for user in participants:
-                uid = user.user_id
-
-                # Skip admins
-                if await is_admin(uid):
-                    continue
-
-                # ===== RULE 1: NOT MEMBER =====
-                if not await is_member(uid):
-                    if uid not in muted_cache:
-                        await vc_mute(call, uid)
-                    continue
-
-                # ===== RULE 2: AUTO UNMUTE =====
-                if uid in muted_cache:
-                    await vc_unmute(call, uid)
-
-                # ===== RULE 3: VIDEO ON =====
-                if getattr(user, "video", False):
-                    if uid not in muted_cache:
-                        await vc_mute(call, uid)
-                    continue
-
-                # ===== RULE 4: CHANNEL / BOT =====
-                if getattr(user, "peer", None):
-                    if "channel" in str(type(user.peer)).lower():
-                        if uid not in muted_cache:
-                            await vc_mute(call, uid)
-                        continue
-
-        except Exception as e:
-            print("[ERROR]", e)
-
-        await asyncio.sleep(CHECK_DELAY)
-
 # ===== AUTO JOIN VC =====
-async def auto_join():
+async def join_vc():
     try:
-        data = await client(GetGroupCallRequest(GROUP_ID))
+        data = await client(GetGroupCallRequest(
+            peer=GROUP_ID,
+            limit=0
+        ))
         call = data.call
 
         await client(JoinGroupCallRequest(
@@ -119,15 +77,59 @@ async def auto_join():
             params=b'{}'
         ))
 
-        print("✅ Joined VC successfully")
-
+        print("✅ Joined VC")
     except Exception as e:
         print("Join VC Error:", e)
+
+# ===== MAIN LOOP =====
+async def monitor():
+    print("🚀 VC SYSTEM RUNNING")
+
+    while True:
+        try:
+            data = await client(GetGroupCallRequest(
+                peer=GROUP_ID,
+                limit=0
+            ))
+
+            call = data.call
+
+            participants = await client(GetGroupCallParticipantsRequest(
+                call=call,
+                limit=100
+            ))
+
+            for user in participants.participants:
+                uid = user.user_id
+
+                # Skip admins
+                if await is_admin(uid):
+                    continue
+
+                # RULE 1: Not in group
+                if not await is_member(uid):
+                    if uid not in muted_cache:
+                        await vc_mute(call, uid)
+                    continue
+
+                # RULE 2: Auto unmute
+                if uid in muted_cache:
+                    await vc_unmute(call, uid)
+
+                # RULE 3: Video (limited detection)
+                if getattr(user, "video", False):
+                    if uid not in muted_cache:
+                        await vc_mute(call, uid)
+
+        except Exception as e:
+            print("[ERROR]", e)
+
+        await asyncio.sleep(CHECK_DELAY)
 
 # ===== START =====
 async def main():
     async with client:
-        await auto_join()
+        await join_vc()
         await monitor()
 
 if __name__ == "__main__":
