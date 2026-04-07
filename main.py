@@ -2,80 +2,95 @@ import os
 import asyncio
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.functions.phone import GetGroupCallRequest, GetGroupCallParticipantsRequest, ToggleGroupCallParticipant
 from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.tl.functions.phone import GetGroupCallRequest, GetGroupCallParticipantsRequest, ToggleGroupCallParticipant
 
 # ====== ENV VARIABLES ======
 API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")  # StringSession
-TARGET_GROUP = int(os.getenv("TARGET_GROUP"))  # group/channel ID to monitor
+API_HASH = os.getenv("API_HASH"))
+SESSION_STRING = os.getenv("SESSION_STRING")  # Invisible StringSession
+TARGET_GROUP = int(os.getenv("TARGET_GROUP"))  # Group/Channel ID to monitor
+CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", 0.5))  # 0.5 sec for ultra fast
 
-# ====== CLIENT SETUP (Invisible) ======
+# ====== CLIENT SETUP ======
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ====== HELPER FUNCTIONS ======
-async def get_vc_participants():
-    """Get all participants in the VC."""
-    try:
-        call = await client(GetGroupCallRequest(TARGET_GROUP))
-        participants = await client(GetGroupCallParticipantsRequest(call=call.call, limit=100))
-        return participants.participants
-    except Exception as e:
-        print(f"[VC Error] {e}")
-        return []
-
+# ====== HELPERS ======
 async def is_admin(user_id):
-    """Check if user is admin."""
     try:
         participant = await client(GetParticipantRequest(TARGET_GROUP, user_id))
-        return participant.participant.admin_rights is not None
+        return getattr(participant.participant, "admin_rights", None) is not None
     except:
         return False
 
 async def is_member(user_id):
-    """Check if user is a member of the group."""
     try:
         await client(GetParticipantRequest(TARGET_GROUP, user_id))
         return True
     except:
         return False
 
-async def mute_user(user_id):
-    """Mute a VC participant."""
+async def get_vc_call():
     try:
-        await client(ToggleGroupCallParticipant(
-            call=TARGET_GROUP,
-            participant=user_id,
-            muted=True
-        ))
-        print(f"[Muted] User {user_id}")
+        call = await client(GetGroupCallRequest(TARGET_GROUP))
+        return call.call
     except Exception as e:
-        print(f"[Mute Failed] {user_id}: {e}")
+        print(f"[VC ERROR] {e}")
+        return None
 
-# ====== GHOST MODE FUNCTIONS ======
-async def ghost_mute_user(user_id):
-    """Join VC invisible, mute, and leave fast."""
-    # Already invisible via session string, so just mute
-    await mute_user(user_id)
-    # Optional: leave VC instantly if you want stealth leave (0.5 sec)
-    await asyncio.sleep(0.5)
+async def get_vc_participants(call):
+    try:
+        result = await client(GetGroupCallParticipantsRequest(call=call, limit=100))
+        return result.participants
+    except Exception as e:
+        print(f"[VC PARTICIPANTS ERROR] {e}")
+        return []
 
-# ====== AUTO-MUTE LOOP (Always Monitoring) ======
+async def mute_user(call, user_id):
+    try:
+        await client(ToggleGroupCallParticipant(call=call, participant=user_id, muted=True))
+        print(f"[MUTED] {user_id}")
+    except Exception as e:
+        print(f"[MUTE FAILED] {user_id}: {e}")
+
+async def ghost_mute(call, user_id):
+    await mute_user(call, user_id)
+    await asyncio.sleep(0.1)  # ultra stealth leave (optional)
+
+# ====== MEGA MONITOR LOOP ======
 async def monitor_vc():
+    """Always-on VC monitoring, Mega Ultra Elite version."""
+    seen_users = set()  # Track new joiners for instant action
     while True:
-        participants = await get_vc_participants()
-        for user in participants:
-            if not await is_admin(user.id):
-                # Rule 1: Not in group → mute
-                # Rule 2: Video on → mute
-                if not await is_member(user.id) or getattr(user, "video", False):
-                    await ghost_mute_user(user.id)
-        await asyncio.sleep(2)  # checks VC every 2 seconds
+        call = await get_vc_call()
+        if call:
+            participants = await get_vc_participants(call)
+            for user in participants:
+                user_id = user.peer.user_id
+                # Skip admins
+                if await is_admin(user_id):
+                    continue
+
+                # Ultra rules:
+                # 1️⃣ Not a group member → mute instantly
+                if not await is_member(user_id):
+                    await ghost_mute(call, user_id)
+                    continue
+
+                # 2️⃣ Video ON → mute instantly
+                if getattr(user, "video", False):
+                    await ghost_mute(call, user_id)
+                    continue
+
+                # 3️⃣ Instant reaction for new joiners
+                if user_id not in seen_users:
+                    seen_users.add(user_id)
+                    await ghost_mute(call, user_id)
+        await asyncio.sleep(CHECK_INTERVAL)
 
 # ====== MAIN ======
 async def main():
-    print("🚀 Ghost VC Bot Running (Admins Safe, Always Monitoring)")
+    print("🚀 MEGA ULTRA ELITE Ghost VC Bot Running! (Admins Safe, Instant Mute, Always Monitoring)")
     async with client:
         await monitor_vc()
 
