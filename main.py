@@ -14,7 +14,14 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 CHECK_INTERVAL = 0.5  # ultra-fast, safe for V3
 
 # ================= APP ====================
-app = Client("ultra_v3_ghost", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+# Add sync_time=True to fix msg_id/time issues on Railway
+app = Client(
+    "ultra_v3_ghost",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
+)
+
 muted_users = set()
 
 # ----------------- MUTE FUNCTION ----------------
@@ -57,7 +64,9 @@ async def get_group_call():
 # ----------------- MAIN LOOP ----------------
 async def ultra_loop():
     print("🚀 Ultra V3 God Mode Ghost VC running...")
-    await app.start()
+
+    # Start app with time sync enabled
+    await app.start(sync_time=True)
 
     while True:
         try:
