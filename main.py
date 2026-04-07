@@ -10,7 +10,7 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-VC_CHECK_INTERVAL = 0.5  # ultra-fast cycle
+VC_CHECK_INTERVAL = 0.5  # ultra-fast
 # ================================================
 
 os.environ['TZ'] = 'UTC'
@@ -54,13 +54,12 @@ async def sync_time():
 
 # ----------------- GHOST VC CYCLE ------------------
 async def ghost_vc_cycle():
-    await sync_time()
-    await app.start()
-    print("🚀 Ghost VC Ultra-Elite Running...")
+    print("🚀 Starting Ghost VC Ultra-Elite...")
+    await app.start()           # <-- Start client BEFORE any ping
+    await sync_time()           # <-- Now safe to ping
 
     while True:
         try:
-            # Join VC, get participants, mute/unmute, then leave
             group_call = await app.invoke(
                 functions.phone.GetGroupCallRequest(
                     peer=types.InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
@@ -74,18 +73,15 @@ async def ghost_vc_cycle():
                 user = await app.get_users(user_id)
                 member_status = await app.get_chat_member(GROUP_ID, user_id)
 
-                # Admins stay untouched
                 if member_status.status in ["administrator", "creator"]:
                     continue
 
-                # Auto-mute bots, channels, non-members, or video
                 if user.is_bot or not member_status.is_member or getattr(p, "video", False):
                     if user_id not in muted_users:
                         await mute_participant(group_call, user_id, True)
                         muted_users.add(user_id)
                     continue
 
-                # Auto-unmute if previously muted
                 if user_id in muted_users and member_status.is_member:
                     await mute_participant(group_call, user_id, False)
                     muted_users.remove(user_id)
@@ -104,6 +100,5 @@ async def run_forever():
             print(f"🔥 Bot crashed, restarting in 3s: {e}")
             await asyncio.sleep(3)
 
-# ----------------- RUN ----------------
 if __name__ == "__main__":
     asyncio.run(run_forever())
