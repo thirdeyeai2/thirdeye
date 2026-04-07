@@ -1,15 +1,17 @@
 from pyrogram import Client, filters, enums
-from pyrogram.types import ChatMember
-import asyncio
+from pyrogram.types import ChatPermissions
+from dotenv import load_dotenv
 import os
 
-# ================= ENV =================
+# ================= LOAD ENV =================
+load_dotenv()
+
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise ValueError("Missing API_ID / API_HASH / BOT_TOKEN")
+    raise ValueError("❌ Missing API_ID / API_HASH / BOT_TOKEN")
 
 API_ID = int(API_ID)
 
@@ -33,7 +35,7 @@ async def toggle_protection(client, message):
 
     await message.reply(
         f"**Third Eye 2.0 {status}**\n"
-        "👁️ Auto-mute: non-members, channels, video-call users"
+        "👁️ Auto-mute: non-members & VC users"
     )
 
 # ================= VC PROTECTION =================
@@ -44,54 +46,49 @@ async def vc_protection(client, event):
     if not PROTECTED_GROUPS.get(chat_id):
         return
 
-    actions = [
-        event.voice_chat_members_added,
-        event.voice_chat_members_removed
-    ]
+    # Pyrogram gives a list of participants
+    for member in event.participants:
+        user = member.user
+        user_id = user.id
 
-    for action in actions:
-        if not action:
-            continue
+        username = user.username or user.first_name or "User"
 
-        for member in action:
-            user_id = member.user.id
+        try:
+            chat_member = await client.get_chat_member(chat_id, user_id)
 
-            # ✅ SAFE USERNAME HANDLING
-            username = member.user.username or member.user.first_name or "User"
+            if not chat_member:
+                continue
 
-            try:
-                chat_member = await client.get_chat_member(chat_id, user_id)
-                status = chat_member.status
+            status = chat_member.status
 
-                # 🚫 Non-members / channels
-                if status == enums.ChatMemberStatus.LEFT or "channel" in str(member.user):
-                    await client.edit_chat_member_permissions(
-                        chat_id,
-                        user_id,
-                        can_send_messages=False,
-                        can_send_media_messages=False
-                    )
+            # 🚫 Non-members
+            if status == enums.ChatMemberStatus.LEFT:
+                await client.restrict_chat_member(
+                    chat_id,
+                    user_id,
+                    ChatPermissions()  # no permissions
+                )
 
-                    await client.send_message(
-                        chat_id,
-                        f"🚫 {username} muted (non-member/channel)"
-                    )
+                await client.send_message(
+                    chat_id,
+                    f"🚫 {username} muted (non-member)"
+                )
 
-                # 📹 Video chat detection
-                elif event.video_chat_participants_invited:
-                    await client.edit_chat_member_permissions(
-                        chat_id,
-                        user_id,
-                        can_send_messages=False
-                    )
+            # 📹 Video ON detection
+            if member.is_self is False and member.video:
+                await client.restrict_chat_member(
+                    chat_id,
+                    user_id,
+                    ChatPermissions()
+                )
 
-                    await client.send_message(
-                        chat_id,
-                        f"📹 {username} muted (video on)"
-                    )
+                await client.send_message(
+                    chat_id,
+                    f"📹 {username} muted (video on)"
+                )
 
-            except Exception as e:
-                print(f"Error: {e}")
+        except Exception as e:
+            print(f"Error: {e}")
 
 # ================= START =================
 print("👁️ Third Eye 2.0 Live!")
