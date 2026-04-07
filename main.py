@@ -66,8 +66,9 @@ async def get_group_call():
 async def ultra_loop():
     print("🚀 Ultra V3 God Mode Ghost VC running...")
 
-    # Start app with time sync enabled
+    # Start app
     await app.start()
+
     while True:
         try:
             group_call = await get_group_call()
@@ -76,7 +77,13 @@ async def ultra_loop():
                 continue
 
             for p in group_call.participants:
-                user_id = p.user_id
+                # Pyrogram 2.x: participant info is inside p.participant
+                participant = getattr(p, "participant", None)
+                if not participant or not hasattr(participant, "user_id"):
+                    continue
+
+                user_id = participant.user_id
+
                 # fetch member info
                 try:
                     member = await app.get_chat_member(GROUP_ID, user_id)
@@ -95,7 +102,8 @@ async def ultra_loop():
                     continue
 
                 # mute if video enabled
-                if getattr(p, "video_enabled", False):
+                video_enabled = getattr(participant, "video_enabled", False)
+                if video_enabled:
                     if user_id not in muted_users:
                         await mute_user(group_call, user_id, True)
                         muted_users.add(user_id)
