@@ -14,7 +14,7 @@ from telethon.tl.functions.phone import GetGroupCallRequest
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SESSION = os.getenv("SESSION")  # Telethon string session
+SESSION = os.getenv("SESSION")  # Must be pre-generated string session
 
 # Groups to protect (replace with your group IDs)
 PROTECTED_GROUPS = {
@@ -26,9 +26,9 @@ PROTECTED_GROUPS = {
 # Pyrogram bot client
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Telethon userbot client
+# Telethon userbot client (must have valid string session)
 userbot = TelegramClient(
-    StringSession(SESSION),  # ✅ Correct usage
+    StringSession(SESSION),  # ✅ Railway-safe
     API_ID,
     API_HASH
 )
@@ -63,7 +63,6 @@ async def auto_unmute(_, update):
                     can_add_web_page_previews=True
                 )
             )
-
             FLAGGED_USERS[chat_id].remove(user_id)
             print(f"✅ Auto unmuted {user_id}")
 
@@ -73,7 +72,7 @@ async def auto_unmute(_, update):
 # ================= VC SCANNER =================
 
 async def vc_scanner():
-    await userbot.start()
+    await userbot.start()  # ✅ Won’t ask for phone
     print("👻 Userbot started (VC scanner active)")
 
     while True:
@@ -83,8 +82,6 @@ async def vc_scanner():
 
             try:
                 entity = await userbot.get_entity(chat_id)
-
-                # Skip if no active call
                 if not getattr(entity, "call", None):
                     continue
 
