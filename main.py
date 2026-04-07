@@ -2,12 +2,11 @@ import os
 import asyncio
 from dotenv import load_dotenv
 
-# BOT
 from pyrogram import Client, filters, enums
 from pyrogram.types import ChatPermissions
 
-# USERBOT
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest
 
 load_dotenv()
@@ -15,10 +14,15 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+STRING_SESSION = os.getenv("STRING_SESSION")
 
-# ================= INIT =================
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-userbot = TelegramClient("userbot", API_ID, API_HASH)
+
+userbot = TelegramClient(
+    StringSession(STRING_SESSION),
+    API_ID,
+    API_HASH
+)
 
 PROTECTED_GROUPS = {}
 
@@ -54,42 +58,7 @@ async def toggle(_, message):
     status = "🟢 ENABLED" if PROTECTED_GROUPS[chat_id] else "🔴 DISABLED"
     await message.reply(f"👁️ Protection {status}")
 
-# ================= AUTO MESSAGE PROTECTION =================
-@bot.on_message(filters.group & ~filters.service)
-async def auto_protect(_, message):
-    chat_id = message.chat.id
-
-    if not PROTECTED_GROUPS.get(chat_id):
-        return
-
-    user = message.from_user
-    if not user:
-        return
-
-    user_id = user.id
-    username = user.username or user.first_name or "User"
-
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-
-        # Skip admins
-        if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-            return
-
-        # 🚫 Non-members
-        if member.status == enums.ChatMemberStatus.LEFT:
-            await bot.restrict_chat_member(chat_id, user_id, ChatPermissions())
-            await message.reply(f"🚫 {username} muted (non-member)")
-
-        # 🚫 Channel accounts
-        if message.sender_chat:
-            await bot.delete_messages(chat_id, message.id)
-            await message.reply("🚫 Channel account muted")
-
-    except Exception as e:
-        print("Message protection error:", e)
-
-# ================= VC SCANNER (ULTRA FAST) =================
+# ================= VC SCANNER =================
 async def vc_scanner():
     while True:
         for chat_id in PROTECTED_GROUPS:
@@ -105,14 +74,14 @@ async def vc_scanner():
 
                     user_id = p.peer.user_id
 
-                    # 🎥 VIDEO DETECTION
                     if getattr(p, "video", False):
-
                         try:
                             member = await bot.get_chat_member(chat_id, user_id)
 
-                            # Skip admins
-                            if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                            if member.status in [
+                                enums.ChatMemberStatus.ADMINISTRATOR,
+                                enums.ChatMemberStatus.OWNER
+                            ]:
                                 continue
 
                             await bot.restrict_chat_member(
@@ -123,7 +92,7 @@ async def vc_scanner():
 
                             await bot.send_message(
                                 chat_id,
-                                f"📹 User muted (video ON)"
+                                "📹 User muted (video ON)"
                             )
 
                         except Exception as e:
@@ -132,14 +101,14 @@ async def vc_scanner():
             except Exception as e:
                 print("VC error:", e)
 
-        await asyncio.sleep(2)  # ⚡ FAST LOOP
+        await asyncio.sleep(2)
 
 # ================= MAIN =================
 async def main():
     await bot.start()
     await userbot.start()
 
-    print("👁️ Third Eye 2.0 GOD MODE RUNNING")
+    print("👁️ Hybrid Third Eye Running (STRING MODE)")
 
     await asyncio.gather(
         bot.idle(),
