@@ -13,7 +13,7 @@ from pyrogram.types import ChatPermissions
 # ================= CONFIG =================
 
 API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH"))
+API_HASH = os.getenv("API_HASH")
 SESSION = os.getenv("SESSION")  # Userbot string session
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Optional, for auto-unmute features
 
