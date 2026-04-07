@@ -1,67 +1,67 @@
-import os
 import asyncio
-from dotenv import load_dotenv
+import time
 
-from pyrogram import Client, filters, enums, idle
+from pyrogram import Client, enums
 from pyrogram.types import ChatPermissions
 
 from telethon import TelegramClient
-from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest
 
-load_dotenv()
-
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-STRING_SESSION = os.getenv("STRING_SESSION")
+from config import API_ID, API_HASH, BOT_TOKEN, SESSION, PROTECTED_GROUPS
 
 # ================= CLIENTS =================
+
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 userbot = TelegramClient(
-    StringSession(STRING_SESSION),
-    API_ID,
-    API_HASH
+    StringSession=SESSION if SESSION else None,
+    api_id=API_ID,
+    api_hash=API_HASH
 )
 
-PROTECTED_GROUPS = {}
+# ================= GLOBALS =================
 
-# ================= START PANEL =================
-@bot.on_message(filters.command("start"))
-async def start(_, message):
-    await message.reply_text(
-        "**Thirdeye 👁️**\n"
-        "Hybrid Bot Engine ⚙️\n\n"
+FLAGGED_USERS = {}
+LAST_ACTION = {}
+COOLDOWN = 5
 
-        "🛡 Group Management: Active\n"
-        "🎙 VC Protection: ENABLED\n\n"
+# ================= AUTO UNMUTE =================
 
-        "🔕 Auto-mute Non-members\n"
-        "🔕 Auto-mute Channel Accounts\n"
-        "🔕 Auto-mute Video-On Users (Except Admins)\n\n"
+@bot.on_chat_member_updated()
+async def auto_unmute(_, update):
+    chat_id = update.chat.id
+    user = update.new_chat_member.user
 
-        "📡 Real-time Protection Active\n\n"
-        "✉️ Contact: @vettipeace"
-    )
+    if not user:
+        return
 
-# ================= TOGGLE =================
-@bot.on_message(filters.group & filters.command("thirdeye"))
-async def toggle(_, message):
-    chat_id = message.chat.id
+    user_id = user.id
 
-    member = await bot.get_chat_member(chat_id, message.from_user.id)
-    if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-        return await message.reply("❌ Admin only")
+    if user_id in FLAGGED_USERS.get(chat_id, set()):
+        try:
+            await bot.restrict_chat_member(
+                chat_id,
+                user_id,
+                ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True
+                )
+            )
 
-    PROTECTED_GROUPS[chat_id] = not PROTECTED_GROUPS.get(chat_id, False)
+            FLAGGED_USERS[chat_id].remove(user_id)
 
-    status = "🟢 ENABLED" if PROTECTED_GROUPS[chat_id] else "🔴 DISABLED"
-    await message.reply(f"👁️ Protection {status}")
+            print(f"✅ Auto unmuted {user_id}")
+
+        except Exception as e:
+            print("Unmute error:", e)
 
 # ================= VC SCANNER =================
+
 async def vc_scanner():
     await userbot.start()
+    print("👻 Userbot started (VC scanner active)")
 
     while True:
         for chat_id, enabled in PROTECTED_GROUPS.items():
@@ -78,77 +78,85 @@ async def vc_scanner():
 
                 for p in call.participants:
 
-                    # Skip invalid
                     if not hasattr(p, "peer"):
                         continue
 
-                    # 🚫 CHANNEL / INVALID
+                    now = time.time()
+
+                    # 🔴 CHANNEL DETECT
                     if not hasattr(p.peer, "user_id"):
+                        if now - LAST_ACTION.get(chat_id, 0) > COOLDOWN:
+                            LAST_ACTION[chat_id] = now
+                            print("⚠️ Channel detected in VC")
                         continue
 
                     user_id = p.peer.user_id
 
-                    # 🔍 Check membership
+                    # 🔍 MEMBER CHECK
                     try:
                         member = await bot.get_chat_member(chat_id, user_id)
                         is_member = True
                     except:
                         is_member = False
 
-                    # 🚫 NON-MEMBER AUTO MUTE
+                    # 🚫 NON MEMBER
                     if not is_member:
-                        try:
-                            await bot.restrict_chat_member(
-                                chat_id,
-                                user_id,
-                                ChatPermissions()
-                            )
-                        except:
-                            pass
+                        FLAGGED_USERS.setdefault(chat_id, set()).add(user_id)
+
+                        if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
+                            LAST_ACTION[user_id] = now
+
+                            try:
+                                await bot.restrict_chat_member(
+                                    chat_id,
+                                    user_id,
+                                    ChatPermissions()
+                                )
+                                print(f"🚫 Muted non-member {user_id}")
+                            except Exception as e:
+                                print("Mute error:", e)
+
                         continue
 
-                    # 📹 VIDEO DETECT
+                    # 🔒 KEEP FLAGGED MUTED
+                    if user_id in FLAGGED_USERS.get(chat_id, set()):
+                        continue
+
+                    # 📹 VIDEO ON DETECT
                     if getattr(p, "video", False):
 
-                        try:
-                            member = await bot.get_chat_member(chat_id, user_id)
+                        if member.status in [
+                            enums.ChatMemberStatus.ADMINISTRATOR,
+                            enums.ChatMemberStatus.OWNER
+                        ]:
+                            continue
 
-                            # Skip admins
-                            if member.status in [
-                                enums.ChatMemberStatus.ADMINISTRATOR,
-                                enums.ChatMemberStatus.OWNER
-                            ]:
-                                continue
+                        if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
+                            LAST_ACTION[user_id] = now
 
-                            await bot.restrict_chat_member(
-                                chat_id,
-                                user_id,
-                                ChatPermissions()
-                            )
-
-                        except:
-                            pass
+                            try:
+                                await bot.restrict_chat_member(
+                                    chat_id,
+                                    user_id,
+                                    ChatPermissions()
+                                )
+                                print(f"📹 Muted video user {user_id}")
+                            except Exception as e:
+                                print("Video mute error:", e)
 
             except Exception as e:
                 print("VC error:", e)
 
-        await asyncio.sleep(2)  # ⚡ FAST SCAN
+        await asyncio.sleep(1)  # ⚡ FAST LOOP
 
-# ================= MAIN =================
+# ================= START =================
+
 async def main():
     await bot.start()
-
-    # Fix webhook issues
-    try:
-        await bot.delete_webhook()
-    except:
-        pass
-
-    print("👁️ Hybrid Third Eye PRO Running")
+    print("🤖 Bot started")
 
     await asyncio.gather(
-        vc_scanner(),
-        idle()
+        vc_scanner()
     )
 
 if __name__ == "__main__":
