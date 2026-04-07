@@ -1,2 +1,2 @@
-telethon==1.42.0
-asyncio
+pyrogram==2.0.55
+tgcrypto==1.4.2
