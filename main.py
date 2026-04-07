@@ -1,29 +1,43 @@
 import asyncio
 import time
+import os
 
 from pyrogram import Client, enums
 from pyrogram.types import ChatPermissions
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest
 
-from config import API_ID, API_HASH, BOT_TOKEN, SESSION, PROTECTED_GROUPS
+# ================= CONFIG =================
+
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SESSION = os.getenv("SESSION")  # Telethon string session
+
+# Groups to protect (replace with your group IDs)
+PROTECTED_GROUPS = {
+    -1003844395600: True,
+}
 
 # ================= CLIENTS =================
 
+# Pyrogram bot client
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# Telethon userbot client
 userbot = TelegramClient(
-    StringSession=SESSION if SESSION else None,
-    api_id=API_ID,
-    api_hash=API_HASH
+    StringSession(SESSION),  # ✅ Correct usage
+    API_ID,
+    API_HASH
 )
 
 # ================= GLOBALS =================
 
 FLAGGED_USERS = {}
 LAST_ACTION = {}
-COOLDOWN = 5
+COOLDOWN = 5  # seconds
 
 # ================= AUTO UNMUTE =================
 
@@ -51,7 +65,6 @@ async def auto_unmute(_, update):
             )
 
             FLAGGED_USERS[chat_id].remove(user_id)
-
             print(f"✅ Auto unmuted {user_id}")
 
         except Exception as e:
@@ -71,13 +84,13 @@ async def vc_scanner():
             try:
                 entity = await userbot.get_entity(chat_id)
 
+                # Skip if no active call
                 if not getattr(entity, "call", None):
                     continue
 
                 call = await userbot(GetGroupCallRequest(call=entity.call))
 
                 for p in call.participants:
-
                     if not hasattr(p, "peer"):
                         continue
 
@@ -99,23 +112,17 @@ async def vc_scanner():
                     except:
                         is_member = False
 
-                    # 🚫 NON MEMBER
+                    # 🚫 NON-MEMBER
                     if not is_member:
                         FLAGGED_USERS.setdefault(chat_id, set()).add(user_id)
 
                         if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
                             LAST_ACTION[user_id] = now
-
                             try:
-                                await bot.restrict_chat_member(
-                                    chat_id,
-                                    user_id,
-                                    ChatPermissions()
-                                )
+                                await bot.restrict_chat_member(chat_id, user_id, ChatPermissions())
                                 print(f"🚫 Muted non-member {user_id}")
                             except Exception as e:
                                 print("Mute error:", e)
-
                         continue
 
                     # 🔒 KEEP FLAGGED MUTED
@@ -124,7 +131,6 @@ async def vc_scanner():
 
                     # 📹 VIDEO ON DETECT
                     if getattr(p, "video", False):
-
                         if member.status in [
                             enums.ChatMemberStatus.ADMINISTRATOR,
                             enums.ChatMemberStatus.OWNER
@@ -133,13 +139,8 @@ async def vc_scanner():
 
                         if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
                             LAST_ACTION[user_id] = now
-
                             try:
-                                await bot.restrict_chat_member(
-                                    chat_id,
-                                    user_id,
-                                    ChatPermissions()
-                                )
+                                await bot.restrict_chat_member(chat_id, user_id, ChatPermissions())
                                 print(f"📹 Muted video user {user_id}")
                             except Exception as e:
                                 print("Video mute error:", e)
@@ -155,6 +156,7 @@ async def main():
     await bot.start()
     print("🤖 Bot started")
 
+    # Run VC scanner in parallel
     await asyncio.gather(
         vc_scanner()
     )
