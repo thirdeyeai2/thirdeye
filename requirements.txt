@@ -1,5 +1,2 @@
-telethon==1.34.0
-tgcrypto
-cryptg
-wheel
-setuptools
+telethon==2.30.0
+asyncio
