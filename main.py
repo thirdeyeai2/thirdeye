@@ -1,95 +1,149 @@
+import os
+import asyncio
+from dotenv import load_dotenv
+
+# BOT
 from pyrogram import Client, filters, enums
 from pyrogram.types import ChatPermissions
-from dotenv import load_dotenv
-import os
 
-# ================= LOAD ENV =================
+# USERBOT
+from telethon import TelegramClient
+from telethon.tl.functions.phone import GetGroupCallRequest
+
 load_dotenv()
 
-API_ID = os.getenv("API_ID")
+API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise ValueError("❌ Missing API_ID / API_HASH / BOT_TOKEN")
+# ================= INIT =================
+bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+userbot = TelegramClient("userbot", API_ID, API_HASH)
 
-API_ID = int(API_ID)
+PROTECTED_GROUPS = {}
 
-# ================= APP =================
-app = Client(
-    "ThirdEye2",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
+# ================= START PANEL =================
+@bot.on_message(filters.private & filters.command("start"))
+async def start(_, message):
+    await message.reply_text(
+        "**Thirdeye 👁️**\n"
+        "Hybrid Bot Engine ⚙️\n\n"
 
-PROTECTED_GROUPS = {}  # {chat_id: True/False}
+        "🛡 Group Management: Active\n"
+        "🎙 VC Protection: ENABLED\n\n"
 
-# ================= COMMAND =================
-@app.on_message(filters.command("thirdeye"))
-async def toggle_protection(client, message):
+        "🔕 Auto-mute Non-members\n"
+        "🔕 Auto-mute Channel Accounts\n"
+        "🔕 Auto-mute Video-On Users (Except Admins)\n\n"
+
+        "📡 Real-time Notifications Active\n\n"
+        "✉️ Contact: @vettipeace"
+    )
+
+# ================= TOGGLE =================
+@bot.on_message(filters.group & filters.command("thirdeye"))
+async def toggle(_, message):
     chat_id = message.chat.id
+
+    member = await bot.get_chat_member(chat_id, message.from_user.id)
+    if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+        return await message.reply("❌ Admin only")
+
     PROTECTED_GROUPS[chat_id] = not PROTECTED_GROUPS.get(chat_id, False)
 
     status = "🟢 ENABLED" if PROTECTED_GROUPS[chat_id] else "🔴 DISABLED"
+    await message.reply(f"👁️ Protection {status}")
 
-    await message.reply(
-        f"**Third Eye 2.0 {status}**\n"
-        "👁️ Auto-mute: non-members & VC users"
-    )
-
-# ================= VC PROTECTION =================
-@app.on_voice_chat_members_updated()
-async def vc_protection(client, event):
-    chat_id = event.chat.id
+# ================= AUTO MESSAGE PROTECTION =================
+@bot.on_message(filters.group & ~filters.service)
+async def auto_protect(_, message):
+    chat_id = message.chat.id
 
     if not PROTECTED_GROUPS.get(chat_id):
         return
 
-    # Pyrogram gives a list of participants
-    for member in event.participants:
-        user = member.user
-        user_id = user.id
+    user = message.from_user
+    if not user:
+        return
 
-        username = user.username or user.first_name or "User"
+    user_id = user.id
+    username = user.username or user.first_name or "User"
 
-        try:
-            chat_member = await client.get_chat_member(chat_id, user_id)
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
 
-            if not chat_member:
+        # Skip admins
+        if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            return
+
+        # 🚫 Non-members
+        if member.status == enums.ChatMemberStatus.LEFT:
+            await bot.restrict_chat_member(chat_id, user_id, ChatPermissions())
+            await message.reply(f"🚫 {username} muted (non-member)")
+
+        # 🚫 Channel accounts
+        if message.sender_chat:
+            await bot.delete_messages(chat_id, message.id)
+            await message.reply("🚫 Channel account muted")
+
+    except Exception as e:
+        print("Message protection error:", e)
+
+# ================= VC SCANNER (ULTRA FAST) =================
+async def vc_scanner():
+    while True:
+        for chat_id in PROTECTED_GROUPS:
+            if not PROTECTED_GROUPS.get(chat_id):
                 continue
 
-            status = chat_member.status
+            try:
+                call = await userbot(GetGroupCallRequest(peer=chat_id, limit=100))
 
-            # 🚫 Non-members
-            if status == enums.ChatMemberStatus.LEFT:
-                await client.restrict_chat_member(
-                    chat_id,
-                    user_id,
-                    ChatPermissions()  # no permissions
-                )
+                for p in call.participants:
+                    if not hasattr(p, "peer") or not hasattr(p.peer, "user_id"):
+                        continue
 
-                await client.send_message(
-                    chat_id,
-                    f"🚫 {username} muted (non-member)"
-                )
+                    user_id = p.peer.user_id
 
-            # 📹 Video ON detection
-            if member.is_self is False and member.video:
-                await client.restrict_chat_member(
-                    chat_id,
-                    user_id,
-                    ChatPermissions()
-                )
+                    # 🎥 VIDEO DETECTION
+                    if getattr(p, "video", False):
 
-                await client.send_message(
-                    chat_id,
-                    f"📹 {username} muted (video on)"
-                )
+                        try:
+                            member = await bot.get_chat_member(chat_id, user_id)
 
-        except Exception as e:
-            print(f"Error: {e}")
+                            # Skip admins
+                            if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                                continue
 
-# ================= START =================
-print("👁️ Third Eye 2.0 Live!")
-app.run()
+                            await bot.restrict_chat_member(
+                                chat_id,
+                                user_id,
+                                ChatPermissions()
+                            )
+
+                            await bot.send_message(
+                                chat_id,
+                                f"📹 User muted (video ON)"
+                            )
+
+                        except Exception as e:
+                            print("Mute error:", e)
+
+            except Exception as e:
+                print("VC error:", e)
+
+        await asyncio.sleep(2)  # ⚡ FAST LOOP
+
+# ================= MAIN =================
+async def main():
+    await bot.start()
+    await userbot.start()
+
+    print("👁️ Third Eye 2.0 GOD MODE RUNNING")
+
+    await asyncio.gather(
+        bot.idle(),
+        vc_scanner()
+    )
+
+asyncio.run(main())
