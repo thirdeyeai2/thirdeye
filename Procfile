@@ -1,1 +1,0 @@
-worker: python god_vc_bot.py
