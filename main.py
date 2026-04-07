@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from pyrogram import Client
 from pyrogram.raw import functions, types
+import time
 
 # ==================== CONFIG ====================
 API_ID = int(os.getenv("API_ID"))
@@ -14,7 +15,6 @@ VC_CHECK_INTERVAL = 1  # ultra-fast monitoring
 
 # Force UTC timezone (fix for Railway/Termux time issues)
 os.environ['TZ'] = 'UTC'
-import time
 time.tzset()
 
 # ==================== APP ========================
@@ -27,16 +27,6 @@ app = Client(
 
 # Track muted users for auto-unmute
 muted_users = set()
-
-# ----------------- TIME SYNC -------------------
-async def sync_time():
-    """Sync client time with Telegram to fix [16] BadMsgNotification."""
-    try:
-        ts = int(datetime.now().timestamp() * 1000)
-        await app.send(functions.Ping(ping_id=ts))
-        print("⏱️ Time synced successfully")
-    except Exception as e:
-        print(f"⚠️ Time sync failed: {e}")
 
 # ----------------- MUTE FUNCTION ----------------
 async def mute_participant(call, user_id, mute=True):
@@ -56,14 +46,24 @@ async def mute_participant(call, user_id, mute=True):
 # ----------------- GHOST VC MONITOR ------------------
 async def monitor_vc():
     await app.start()
-    await asyncio.sleep(1)      # wait for proper startup
-    await sync_time()           # initial time sync
+    print("⏳ Starting Telegram time sync...")
+
+    # Keep sending ping until Telegram accepts it (fixes [16])
+    synced = False
+    while not synced:
+        try:
+            ts = int(datetime.utcnow().timestamp() * 1000)
+            await app.send(functions.Ping(ping_id=ts))
+            synced = True
+            print("⏱️ Time synced successfully with Telegram!")
+        except Exception as e:
+            print(f"⚠️ Ping failed, retrying in 1s: {e}")
+            await asyncio.sleep(1)
+
     print("🚀 Ghost VC Controller Running in Ultra Invisible Mode...")
 
     while True:
         try:
-            await sync_time()  # sync time every loop (fixes [16])
-            
             # Get group call info
             group_call = await app.send(
                 functions.phone.GetGroupCallRequest(
