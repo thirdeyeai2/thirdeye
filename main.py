@@ -7,7 +7,7 @@ from telethon.tl.functions.phone import GetGroupCallRequest, GetGroupCallPartici
 
 # ====== ENV VARIABLES ======
 API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH"))
+API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")  # Invisible StringSession
 TARGET_GROUP = int(os.getenv("TARGET_GROUP"))  # Group/Channel ID to monitor
 CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", 0.5))  # 0.5 sec for ultra fast
