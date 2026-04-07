@@ -8,7 +8,6 @@ from pyrogram.types import ChatPermissions
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest
-from telethon.tl.types import InputPeerChannel
 
 load_dotenv()
 
@@ -29,7 +28,7 @@ userbot = TelegramClient(
 PROTECTED_GROUPS = {}
 
 # ================= START PANEL =================
-@bot.on_message(filters.private & filters.command("start"))
+@bot.on_message(filters.command("start"))
 async def start(_, message):
     await message.reply_text(
         "**Thirdeye 👁️**\n"
@@ -42,7 +41,7 @@ async def start(_, message):
         "🔕 Auto-mute Channel Accounts\n"
         "🔕 Auto-mute Video-On Users (Except Admins)\n\n"
 
-        "📡 Real-time Notifications Active\n\n"
+        "📡 Real-time Protection Active\n\n"
         "✉️ Contact: @vettipeace"
     )
 
@@ -72,62 +71,84 @@ async def vc_scanner():
             try:
                 entity = await userbot.get_entity(chat_id)
 
-                if not hasattr(entity, "call") or not entity.call:
+                if not getattr(entity, "call", None):
                     continue
 
-                call = await userbot(GetGroupCallRequest(
-                    call=entity.call
-                ))
+                call = await userbot(GetGroupCallRequest(call=entity.call))
 
                 for p in call.participants:
-                    if not hasattr(p, "peer") or not hasattr(p.peer, "user_id"):
+
+                    # Skip invalid
+                    if not hasattr(p, "peer"):
+                        continue
+
+                    # 🚫 CHANNEL / INVALID
+                    if not hasattr(p.peer, "user_id"):
                         continue
 
                     user_id = p.peer.user_id
 
-                    # 🎥 Detect video ON
+                    # 🔍 Check membership
+                    try:
+                        member = await bot.get_chat_member(chat_id, user_id)
+                        is_member = True
+                    except:
+                        is_member = False
+
+                    # 🚫 NON-MEMBER AUTO MUTE
+                    if not is_member:
+                        try:
+                            await bot.restrict_chat_member(
+                                chat_id,
+                                user_id,
+                                ChatPermissions()
+                            )
+                        except:
+                            pass
+                        continue
+
+                    # 📹 VIDEO DETECT
                     if getattr(p, "video", False):
 
                         try:
                             member = await bot.get_chat_member(chat_id, user_id)
 
-                            # ❌ Skip admins
+                            # Skip admins
                             if member.status in [
                                 enums.ChatMemberStatus.ADMINISTRATOR,
                                 enums.ChatMemberStatus.OWNER
                             ]:
                                 continue
 
-                            # 🔇 Mute user
                             await bot.restrict_chat_member(
                                 chat_id,
                                 user_id,
                                 ChatPermissions()
                             )
 
-                            await bot.send_message(
-                                chat_id,
-                                "📹 User muted (video ON)"
-                            )
-
-                        except Exception as e:
-                            print("Mute error:", e)
+                        except:
+                            pass
 
             except Exception as e:
                 print("VC error:", e)
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)  # ⚡ FAST SCAN
 
 # ================= MAIN =================
 async def main():
     await bot.start()
 
-    print("👁️ Hybrid Third Eye Running (STRING MODE)")
+    # Fix webhook issues
+    try:
+        await bot.delete_webhook()
+    except:
+        pass
 
-    # run both together
+    print("👁️ Hybrid Third Eye PRO Running")
+
     await asyncio.gather(
         vc_scanner(),
-        idle()   # ✅ correct idle
+        idle()
     )
 
 if __name__ == "__main__":
