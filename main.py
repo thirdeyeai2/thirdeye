@@ -2,12 +2,13 @@ import os
 import asyncio
 from dotenv import load_dotenv
 
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters, enums, idle
 from pyrogram.types import ChatPermissions
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest
+from telethon.tl.types import InputPeerChannel
 
 load_dotenv()
 
@@ -16,6 +17,7 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 STRING_SESSION = os.getenv("STRING_SESSION")
 
+# ================= CLIENTS =================
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 userbot = TelegramClient(
@@ -60,13 +62,22 @@ async def toggle(_, message):
 
 # ================= VC SCANNER =================
 async def vc_scanner():
+    await userbot.start()
+
     while True:
-        for chat_id in PROTECTED_GROUPS:
-            if not PROTECTED_GROUPS.get(chat_id):
+        for chat_id, enabled in PROTECTED_GROUPS.items():
+            if not enabled:
                 continue
 
             try:
-                call = await userbot(GetGroupCallRequest(peer=chat_id, limit=100))
+                entity = await userbot.get_entity(chat_id)
+
+                if not hasattr(entity, "call") or not entity.call:
+                    continue
+
+                call = await userbot(GetGroupCallRequest(
+                    call=entity.call
+                ))
 
                 for p in call.participants:
                     if not hasattr(p, "peer") or not hasattr(p.peer, "user_id"):
@@ -74,16 +85,20 @@ async def vc_scanner():
 
                     user_id = p.peer.user_id
 
+                    # 🎥 Detect video ON
                     if getattr(p, "video", False):
+
                         try:
                             member = await bot.get_chat_member(chat_id, user_id)
 
+                            # ❌ Skip admins
                             if member.status in [
                                 enums.ChatMemberStatus.ADMINISTRATOR,
                                 enums.ChatMemberStatus.OWNER
                             ]:
                                 continue
 
+                            # 🔇 Mute user
                             await bot.restrict_chat_member(
                                 chat_id,
                                 user_id,
@@ -101,18 +116,19 @@ async def vc_scanner():
             except Exception as e:
                 print("VC error:", e)
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
 
 # ================= MAIN =================
 async def main():
     await bot.start()
-    await userbot.start()
 
     print("👁️ Hybrid Third Eye Running (STRING MODE)")
 
+    # run both together
     await asyncio.gather(
-        bot.idle(),
-        vc_scanner()
+        vc_scanner(),
+        idle()   # ✅ correct idle
     )
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
