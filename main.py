@@ -66,8 +66,7 @@ async def ultra_loop():
     print("🚀 Ultra V3 God Mode Ghost VC running...")
 
     # Start app with time sync enabled
-    await app.start(sync_time=True)
-
+    await app.start()
     while True:
         try:
             group_call = await get_group_call()
