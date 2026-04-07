@@ -1,8 +1,88 @@
 from pyrogram import Client, filters, enums
 from pyrogram.types import ChatMember
-import asyncio, os API_ID = int(os.getenv("API_ID")) # my.telegram.org
+import asyncio
+import os
+
+API_ID = int(os.getenv("API_ID"))  # my.telegram.org
 API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN") # BotFather app = Client("ThirdEye2", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-PROTECTED_GROUPS = {} # {chat_id: True/False} @app.on_message(filters.command("thirdeye"))
-async def toggle_protection(client, message): chat_id = message.chat.id PROTECTED_GROUPS[chat_id] = not PROTECTED_GROUPS.get(chat_id, False) status = "🟢 ENABLED" if PROTECTED_GROUPS[chat_id] else "🔴 DISABLED" await message.reply(f"**Third Eye 2.0 {status}**\n👁️ Auto-mute: non-members, channels, video-call users") @app.on_voice_chat_members_updatedasync def vc_protection(client, event): chat_id = event.chat.id if not PROTECTED_GROUPS.get(chat_id): return for action in [event.voice_chat_members_added, event.voice_chat_members_removed]: if not action: continue for member in action: user_id = member.user.id try: chat_member = await client.get_chat_member(chat_id, user_id) status = chat_member.status # Auto-mute non-members/channels/video if status == enums.ChatMemberStatus.LEFT or "channel" in str(member.user): await client.edit_chat_member_permissions(chat_id, user_id, can_send_messages=False, can_send_media_messages=False) await client.send_message(chat_id, f"🚫 @{member.user.username} muted (non-member/channel)") elif event.video_chat_participants_invited: await client.edit_chat_member_permissions(chat_id, user_id, can_send_messages=False) await client.send_message(chat_id, f"📹 @{member.user.username} muted (video on)") except Exception: pass print("👁️ Third Eye 2.0 Live!")
-app.run
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # BotFather
+
+app = Client(
+    "ThirdEye2",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
+
+PROTECTED_GROUPS = {}  # {chat_id: True/False}
+
+
+@app.on_message(filters.command("thirdeye"))
+async def toggle_protection(client, message):
+    chat_id = message.chat.id
+    PROTECTED_GROUPS[chat_id] = not PROTECTED_GROUPS.get(chat_id, False)
+
+    status = "🟢 ENABLED" if PROTECTED_GROUPS[chat_id] else "🔴 DISABLED"
+
+    await message.reply(
+        f"**Third Eye 2.0 {status}**\n"
+        "👁️ Auto-mute: non-members, channels, video-call users"
+    )
+
+
+@app.on_voice_chat_members_updated()
+async def vc_protection(client, event):
+    chat_id = event.chat.id
+
+    if not PROTECTED_GROUPS.get(chat_id):
+        return
+
+    actions = [
+        event.voice_chat_members_added,
+        event.voice_chat_members_removed
+    ]
+
+    for action in actions:
+        if not action:
+            continue
+
+        for member in action:
+            user_id = member.user.id
+
+            try:
+                chat_member = await client.get_chat_member(chat_id, user_id)
+                status = chat_member.status
+
+                # Auto-mute non-members / channels
+                if status == enums.ChatMemberStatus.LEFT or "channel" in str(member.user):
+                    await client.edit_chat_member_permissions(
+                        chat_id,
+                        user_id,
+                        can_send_messages=False,
+                        can_send_media_messages=False
+                    )
+
+                    await client.send_message(
+                        chat_id,
+                        f"🚫 @{member.user.username} muted (non-member/channel)"
+                    )
+
+                # Video chat detection
+                elif event.video_chat_participants_invited:
+                    await client.edit_chat_member_permissions(
+                        chat_id,
+                        user_id,
+                        can_send_messages=False
+                    )
+
+                    await client.send_message(
+                        chat_id,
+                        f"📹 @{member.user.username} muted (video on)"
+                    )
+
+            except Exception as e:
+                print(e)
+
+
+print("👁️ Third Eye 2.0 Live!")
+app.run()
