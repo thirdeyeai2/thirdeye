@@ -10,27 +10,25 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-VC_CHECK_INTERVAL = 0.5  # ultra-fast monitoring
+VC_CHECK_INTERVAL = 0.5  # ultra-fast cycle
 # ================================================
 
-# Force UTC timezone (Railway/Termux fix)
 os.environ['TZ'] = 'UTC'
 time.tzset()
 
-# ==================== APP ========================
 app = Client(
-    "vcghost",
+    "vcghost_ultra",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING
 )
 
-muted_users = set()  # track muted users for auto-unmute
+muted_users = set()
 
 # ----------------- MUTE FUNCTION ----------------
 async def mute_participant(call, user_id, mute=True):
     try:
-        await app.send(
+        await app.invoke(
             functions.phone.ToggleGroupCallParticipant(
                 call=call,
                 participant=user_id,
@@ -41,34 +39,29 @@ async def mute_participant(call, user_id, mute=True):
     except Exception as e:
         print(f"Error muting {user_id}: {e}")
 
-# ----------------- PRE-START TIME SYNC ----------------
-async def pre_start_sync():
-    """Sync client time BEFORE starting Pyrogram to prevent [16] error."""
+# ----------------- TIME SYNC ----------------
+async def sync_time():
     synced = False
     while not synced:
         try:
             ts = int(datetime.utcnow().timestamp() * 1000)
-            # Raw ping using temporary session
-            await app.send(functions.Ping(ping_id=ts))
+            await app.invoke(functions.Ping(ping_id=ts))
             synced = True
-            print("⏱️ Time synced successfully with Telegram!")
+            print("⏱️ Time synced with Telegram!")
         except Exception as e:
-            print(f"⚠️ Ping failed, retrying in 1s: {e}")
+            print(f"⚠️ Ping failed, retrying 1s: {e}")
             await asyncio.sleep(1)
 
-# ----------------- GHOST VC MONITOR ------------------
-async def monitor_vc():
-    # Pre-start sync loop
-    await pre_start_sync()
-
-    # Start the client AFTER time is synced
+# ----------------- GHOST VC CYCLE ------------------
+async def ghost_vc_cycle():
+    await sync_time()
     await app.start()
-    print("🚀 Ghost VC Controller Running in Ultra Invisible Mode...")
+    print("🚀 Ghost VC Ultra-Elite Running...")
 
     while True:
         try:
-            # Get group call info
-            group_call = await app.send(
+            # Join VC, get participants, mute/unmute, then leave
+            group_call = await app.invoke(
                 functions.phone.GetGroupCallRequest(
                     peer=types.InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
                     limit=100
@@ -81,27 +74,36 @@ async def monitor_vc():
                 user = await app.get_users(user_id)
                 member_status = await app.get_chat_member(GROUP_ID, user_id)
 
-                # 1️⃣ Admin exemption
+                # Admins stay untouched
                 if member_status.status in ["administrator", "creator"]:
                     continue
 
-                # 2️⃣ Auto-mute bots, channels, non-members, or video
+                # Auto-mute bots, channels, non-members, or video
                 if user.is_bot or not member_status.is_member or getattr(p, "video", False):
                     if user_id not in muted_users:
                         await mute_participant(group_call, user_id, True)
                         muted_users.add(user_id)
                     continue
 
-                # 3️⃣ Auto unmute if previously muted and now member
+                # Auto-unmute if previously muted
                 if user_id in muted_users and member_status.is_member:
                     await mute_participant(group_call, user_id, False)
                     muted_users.remove(user_id)
 
         except Exception as e:
-            print(f"⚠️ Error in VC loop: {e}")
+            print(f"⚠️ VC loop error: {e}")
 
         await asyncio.sleep(VC_CHECK_INTERVAL)
 
-# ----------------- RUN -------------------------
+# ----------------- AUTO-RESTART ----------------
+async def run_forever():
+    while True:
+        try:
+            await ghost_vc_cycle()
+        except Exception as e:
+            print(f"🔥 Bot crashed, restarting in 3s: {e}")
+            await asyncio.sleep(3)
+
+# ----------------- RUN ----------------
 if __name__ == "__main__":
-    asyncio.run(monitor_vc())
+    asyncio.run(run_forever())
