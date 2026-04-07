@@ -10,14 +10,15 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-VC_CHECK_INTERVAL = 0.5  # ultra-fast
+VC_CHECK_INTERVAL = 0.5  # ultra-fast VC loop
+STEALTH_DELAY = 0.5       # join-mute-leave delay in seconds
 # ================================================
 
 os.environ['TZ'] = 'UTC'
 time.tzset()
 
 app = Client(
-    "vcghost_ultra",
+    "vcghost_ultra_invisible",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING
@@ -52,11 +53,30 @@ async def sync_time():
             print(f"⚠️ Ping failed, retrying 1s: {e}")
             await asyncio.sleep(1)
 
-# ----------------- GHOST VC CYCLE ------------------
-async def ghost_vc_cycle():
-    print("🚀 Starting Ghost VC Ultra-Elite...")
-    await app.start()           # <-- Start client BEFORE any ping
-    await sync_time()           # <-- Now safe to ping
+# ----------------- INVISIBLE STEALTH VC ----------------
+async def stealth_join_leave():
+    try:
+        # Invisible join by not sending presence
+        group_call = await app.invoke(
+            functions.phone.GetGroupCallRequest(
+                peer=types.InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
+                limit=0
+            )
+        )
+        print("👻 Joined VC invisibly")
+
+        # Mute self immediately
+        await mute_participant(group_call, "self", True)
+        await asyncio.sleep(STEALTH_DELAY)
+        print("🚪 Left VC stealthily")
+    except Exception as e:
+        print(f"⚠️ Stealth join/leave error: {e}")
+
+# ----------------- GHOST VC LOOP ----------------
+async def ghost_vc_loop():
+    print("🚀 Ghost VC Ultra-Invisible Starting...")
+    await app.start()
+    await sync_time()
 
     while True:
         try:
@@ -91,11 +111,14 @@ async def ghost_vc_cycle():
 
         await asyncio.sleep(VC_CHECK_INTERVAL)
 
-# ----------------- AUTO-RESTART ----------------
+# ----------------- AUTO-RESTART FOREVER ----------------
 async def run_forever():
     while True:
         try:
-            await ghost_vc_cycle()
+            await asyncio.gather(
+                ghost_vc_loop(),
+                stealth_join_leave()
+            )
         except Exception as e:
             print(f"🔥 Bot crashed, restarting in 3s: {e}")
             await asyncio.sleep(3)
