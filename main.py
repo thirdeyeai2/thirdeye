@@ -1,8 +1,8 @@
 import asyncio
-import time
 import os
+import time
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.phone import GetGroupCallRequest, ToggleGroupCallParticipant
 from telethon.tl.types import InputPeerUser
@@ -15,29 +15,26 @@ from pyrogram.types import ChatPermissions
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION = os.getenv("SESSION")  # Userbot string session
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Optional, for auto-unmute features
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Optional, for auto-unmute
 
-# Replace with your group IDs
+# Replace with your target groups
 PROTECTED_GROUPS = {
-    -1001234567890: True,
+    -1001747095956: True,
 }
 
-COOLDOWN = 5  # seconds between actions
+COOLDOWN = 5  # seconds
 
 # ================= CLIENTS =================
 
-# Userbot (Telethon)
 userbot = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
-
-# Optional bot for auto-unmute / logging
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ================= GLOBALS =================
 
-FLAGGED_USERS = {}  # muted non-members
-LAST_ACTION = {}    # cooldown tracker
+FLAGGED_USERS = {}
+LAST_ACTION = {}
 
-# ================= AUTO UNMUTE (Optional) =================
+# ================= AUTO UNMUTE =================
 
 @bot.on_chat_member_updated()
 async def auto_unmute(_, update):
@@ -107,7 +104,6 @@ async def vc_scanner():
                         if now - LAST_ACTION.get(user_id, 0) > COOLDOWN:
                             LAST_ACTION[user_id] = now
                             try:
-                                # ⚡ Elite userbot mute in VC
                                 await userbot(ToggleGroupCallParticipant(
                                     call=entity.call,
                                     participant=InputPeerUser(user_id, 0),
@@ -141,7 +137,7 @@ async def vc_scanner():
             except Exception as e:
                 print("VC scanner error:", e)
 
-        await asyncio.sleep(1)  # fast loop
+        await asyncio.sleep(1)
 
 # ================= START =================
 
