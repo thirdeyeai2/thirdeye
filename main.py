@@ -48,13 +48,14 @@ async def get_group_call():
             return None
 
         group_call = await app.invoke(
-            GetGroupCall(
-                call=InputGroupCall(
-                    id=call.id,
-                    access_hash=call.access_hash
-                )
-            )
-        )
+    GetGroupCall(
+        call=InputGroupCall(
+            id=call.id,
+            access_hash=call.access_hash
+        ),
+        limit=50  # fetch up to 50 participants at once (adjust if needed)
+    )
+)
         return group_call
 
     except Exception as e:
