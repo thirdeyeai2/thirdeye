@@ -1,4 +1,3 @@
-pyrogram
+telethon>=1.33
+pyrogram>=2.0
 tgcrypto
-telethon
-asyncio
