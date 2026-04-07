@@ -1,102 +1,111 @@
 import asyncio
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.types import ChannelParticipantsAdmins
 from telethon.tl.functions.phone import GetGroupCallRequest, ToggleGroupCallParticipant
+from telethon.tl.types import ChannelParticipantsAdmins, InputPeerChannel
 
-# ---------------- CONFIG ----------------
-API_ID = YOUR_API_ID
-API_HASH = 'YOUR_API_HASH'
-SESSION = 'YOUR_SESSION_STRING'
-GROUP_ID = -1001234567890  # your main group id
-CHECK_INTERVAL = 2  # seconds
+# ===== CONFIG =====
+API_ID = 123456          # your api_id
+API_HASH = 'your_api_hash'
+SESSION_STRING = 'your_session_string'
+GROUP_ID = -1001234567890  # group where VC is running
 
-# ---------------- CLIENT ----------------
-client = TelegramClient(SESSION, API_ID, API_HASH)
-muted_users = set()  # track muted users
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ---------------- HELPER FUNCTIONS ----------------
-async def is_admin(user_id):
-    admins = await client.get_participants(GROUP_ID, filter=ChannelParticipantsAdmins)
-    return user_id in [a.id for a in admins]
+# ===== GLOBALS =====
+monitoring = True
+muted_users = set()
+admin_ids = set()
 
-async def mute_user(vc, user_id):
-    try:
-        await client(ToggleGroupCallParticipant(
-            call=vc,
-            participant=user_id,
-            muted=True
-        ))
-        muted_users.add(user_id)
-        print(f"Muted user: {user_id}")
-    except Exception as e:
-        print(f"Error muting {user_id}: {e}")
+async def fetch_admins():
+    """Auto fetch all group admins"""
+    global admin_ids
+    admins = await client(GetParticipantsRequest(
+        channel=GROUP_ID,
+        filter=ChannelParticipantsAdmins(),
+        offset=0,
+        limit=100,
+        hash=0
+    ))
+    admin_ids = {user.id for user in admins.users}
+    print("Admins loaded:", admin_ids)
 
-async def unmute_user(vc, user_id):
-    try:
-        await client(ToggleGroupCallParticipant(
-            call=vc,
-            participant=user_id,
-            muted=False
-        ))
-        if user_id in muted_users:
-            muted_users.remove(user_id)
-        print(f"Unmuted user: {user_id}")
-    except Exception as e:
-        print(f"Error unmuting {user_id}: {e}")
-
-async def get_vc():
-    try:
-        vc = await client(GetGroupCallRequest(
-            peer=GROUP_ID,
-            limit=100
-        ))
-        return vc
-    except Exception as e:
-        print("Join VC Error:", e)
-        return None
-
-# ---------------- EVENTS ----------------
-@client.on(events.ChatAction)
-async def auto_unmute(event):
-    # If someone joins the group and was muted in VC → unmute them
-    if event.user_added or event.user_joined:
-        user_id = event.user_id
-        if user_id in muted_users:
-            vc = await get_vc()
-            if vc:
-                await unmute_user(vc, user_id)
-
-# ---------------- MONITORING LOOP ----------------
 async def monitor_vc():
-    while True:
-        vc = await get_vc()
-        if vc:
-            participants = vc.participants
-            for p in participants:
-                # skip admins
-                if await is_admin(p.user_id):
-                    continue
-                # mute if video on
-                if getattr(p, 'video', False):
-                    await mute_user(vc, p.user_id)
-                # mute if channel account
-                if getattr(p, 'peer', None) and hasattr(p.peer, 'channel_id'):
-                    await mute_user(vc, p.user_id)
-                # mute if not member
-                try:
-                    member = await client.get_entity(p.user_id)
-                    if member not in await client.get_participants(GROUP_ID):
-                        await mute_user(vc, p.user_id)
-                except:
-                    await mute_user(vc, p.user_id)
-        await asyncio.sleep(CHECK_INTERVAL)
-
-# ---------------- MAIN ----------------
-async def main():
-    print("🚀 MEGA VC GHOST + AUTO-UNMUTE SYSTEM RUNNING")
+    """Continuously monitor VC participants"""
     await client.start()
-    await monitor_vc()  # infinite loop
+    print("🚀 MEGA VC GHOST SYSTEM RUNNING")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    while monitoring:
+        try:
+            # Fetch VC participants
+            vc = await client(GetGroupCallRequest(
+                peer=InputPeerChannel(channel_id=GROUP_ID, access_hash=0),
+                limit=50
+            ))
+
+            for user in vc.participants:
+                user_id = user.user_id
+
+                # Skip admins
+                if user_id in admin_ids:
+                    continue
+
+                # Channel accounts / bots always muted
+                if getattr(user, 'bot', False):
+                    await client(ToggleGroupCallParticipant(
+                        call=vc.call,
+                        participant=user,
+                        muted=True
+                    ))
+                    print(f"Muted channel/bot: {user_id}")
+                    muted_users.add(user_id)
+                    continue
+
+                # Non-member auto-mute
+                member = await client.get_permissions(GROUP_ID, user_id)
+                if not member:
+                    await client(ToggleGroupCallParticipant(
+                        call=vc.call,
+                        participant=user,
+                        muted=True
+                    ))
+                    print(f"Muted non-member: {user_id}")
+                    muted_users.add(user_id)
+                    continue
+
+                # Mute if user is on video
+                if getattr(user, 'video', False):
+                    await client(ToggleGroupCallParticipant(
+                        call=vc.call,
+                        participant=user,
+                        muted=True
+                    ))
+                    print(f"Muted video user: {user_id}")
+                    muted_users.add(user_id)
+
+            # Auto unmute when muted users join the group
+            for uid in list(muted_users):
+                member = await client.get_permissions(GROUP_ID, uid)
+                if member:
+                    try:
+                        await client(ToggleGroupCallParticipant(
+                            call=vc.call,
+                            participant=uid,
+                            muted=False
+                        ))
+                        print(f"Unmuted user who joined group: {uid}")
+                        muted_users.remove(uid)
+                    except:
+                        pass
+
+        except Exception as e:
+            print("Error monitoring VC:", e)
+
+        await asyncio.sleep(2)  # 1–2 seconds loop
+
+async def main():
+    await fetch_admins()
+    await monitor_vc()
+
+client.loop.run_until_complete(main())
