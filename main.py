@@ -1,10 +1,10 @@
 import asyncio
 import os
-from pyrogram import Client, enums
-from pyrogram.errors import PeerIdInvalid
-from pyrogram.raw.functions.phone import GetGroupCall, ToggleGroupCallParticipant
-from pyrogram.raw.types import InputPeerChannel
 from datetime import datetime
+from pyrogram import Client
+from pyrogram.errors import PeerIdInvalid
+from pyrogram.raw.functions.phone import GetGroupCall, EditGroupCallParticipant
+from pyrogram.raw.types import InputPeerChannel
 
 # ================= CONFIG =================
 API_ID = int(os.getenv("API_ID"))
@@ -22,7 +22,11 @@ muted_users = set()
 # ----------------- MUTE FUNCTION ----------------
 async def mute_user(call, user_id, mute=True):
     try:
-        await app.invoke(ToggleGroupCallParticipant(call=call, participant=user_id, muted=mute))
+        await app.invoke(EditGroupCallParticipant(
+            call=call,
+            participant=user_id,
+            muted=mute
+        ))
         print(f"{'Muted' if mute else 'Unmuted'} {user_id} at {datetime.now().strftime('%H:%M:%S')}")
     except Exception as e:
         print(f"⚠️ Error muting/unmuting {user_id}: {e}")
@@ -52,13 +56,6 @@ async def ultra_ghost_monitor():
                 if member_status.status in ["administrator", "creator"]:
                     continue
 
-                # ✅ Channel accounts mute
-                if member_status.user.is_channel:
-                    if user_id not in muted_users:
-                        await mute_user(group_call, user_id, True)
-                        muted_users.add(user_id)
-                    continue
-
                 # ✅ Non-member auto-mute
                 if not member_status.is_member:
                     if user_id not in muted_users:
@@ -68,8 +65,16 @@ async def ultra_ghost_monitor():
 
                 # ✅ Video detection mute
                 if getattr(p, "video_enabled", False):
-                    await mute_user(group_call, user_id, True)
-                    muted_users.add(user_id)
+                    if user_id not in muted_users:
+                        await mute_user(group_call, user_id, True)
+                        muted_users.add(user_id)
+                    continue
+
+                # ✅ Channel account detection (channels not allowed in VC)
+                if getattr(p, "user_id", 0) < 0 and str(user_id).startswith("-100"):  # simple check
+                    if user_id not in muted_users:
+                        await mute_user(group_call, user_id, True)
+                        muted_users.add(user_id)
                     continue
 
                 # ✅ Auto-unmute on joining group
