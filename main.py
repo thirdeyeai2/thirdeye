@@ -2,116 +2,132 @@ import os
 import asyncio
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.functions.phone import GetGroupCallRequest
+from telethon.tl.functions.phone import (
+    GetGroupCallRequest,
+    EditGroupCallParticipantRequest,
+    JoinGroupCallRequest
+)
 from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.tl.types import InputPeerUser
 
-# ====== ENV ======
+# ===== ENV =====
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-TARGET_GROUP = int(os.getenv("TARGET_GROUP"))
+GROUP_ID = int(os.getenv("TARGET_GROUP"))
 
-# ====== CLIENT ======
+CHECK_DELAY = 1  # seconds
+
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ====== CACHE ======
-muted_users = set()
+muted_cache = set()
 
-# ====== HELPERS ======
-async def get_call():
-    try:
-        res = await client(GetGroupCallRequest(TARGET_GROUP))
-        return res.call
-    except:
-        return None
-
-async def get_vc_users(call):
-    try:
-        return await client.get_participants(call)
-    except:
-        return []
-
+# ===== HELPERS =====
 async def is_admin(user_id):
     try:
-        p = await client(GetParticipantRequest(TARGET_GROUP, user_id))
+        p = await client(GetParticipantRequest(GROUP_ID, user_id))
         return getattr(p.participant, "admin_rights", None) is not None
     except:
         return False
 
 async def is_member(user_id):
     try:
-        await client(GetParticipantRequest(TARGET_GROUP, user_id))
+        await client(GetParticipantRequest(GROUP_ID, user_id))
         return True
     except:
         return False
 
-# ====== ACTIONS ======
-async def mute(user):
+async def vc_mute(call, user_id):
     try:
-        await client.edit_permissions(TARGET_GROUP, user.id, send_messages=False)
-        muted_users.add(user.id)
-        print(f"[MUTED] {user.id}")
+        await client(EditGroupCallParticipantRequest(
+            call=call,
+            participant=InputPeerUser(user_id, 0),
+            muted=True
+        ))
+        muted_cache.add(user_id)
+        print(f"[VC MUTED] {user_id}")
     except Exception as e:
-        print(f"[MUTE FAIL] {user.id} -> {e}")
+        print(f"[MUTE ERROR] {e}")
 
-async def unmute(user):
+async def vc_unmute(call, user_id):
     try:
-        await client.edit_permissions(TARGET_GROUP, user.id, send_messages=True)
-        muted_users.discard(user.id)
-        print(f"[UNMUTED] {user.id}")
+        await client(EditGroupCallParticipantRequest(
+            call=call,
+            participant=InputPeerUser(user_id, 0),
+            muted=False
+        ))
+        muted_cache.discard(user_id)
+        print(f"[VC UNMUTED] {user_id}")
     except Exception as e:
-        print(f"[UNMUTE FAIL] {user.id} -> {e}")
+        print(f"[UNMUTE ERROR] {e}")
 
-# ====== MAIN LOGIC ======
+# ===== MAIN LOOP =====
 async def monitor():
-    print("🚀 VC Ghost Controller Running...")
+    print("🚀 MEGA VC GHOST SYSTEM RUNNING")
 
     while True:
-        call = await get_call()
+        try:
+            data = await client(GetGroupCallRequest(GROUP_ID))
+            call = data.call
 
-        if call:
-            users = await get_vc_users(call)
+            participants = data.participants
 
-            for user in users:
-                uid = user.id
+            for user in participants:
+                uid = user.user_id
 
                 # Skip admins
                 if await is_admin(uid):
                     continue
 
-                # Detect channel / bot
-                is_channel = getattr(user, "broadcast", False) or getattr(user, "bot", False)
-
-                member = await is_member(uid)
-                video_on = getattr(user, "video", False)
-
-                # ===== RULE 1: Not member → MUTE =====
-                if not member:
-                    if uid not in muted_users:
-                        await mute(user)
+                # ===== RULE 1: NOT MEMBER =====
+                if not await is_member(uid):
+                    if uid not in muted_cache:
+                        await vc_mute(call, uid)
                     continue
 
-                # ===== RULE 2: Joined group → UNMUTE =====
-                if member and uid in muted_users and not video_on:
-                    await unmute(user)
+                # ===== RULE 2: AUTO UNMUTE =====
+                if uid in muted_cache:
+                    await vc_unmute(call, uid)
 
-                # ===== RULE 3: Video ON → MUTE =====
-                if video_on:
-                    if uid not in muted_users:
-                        await mute(user)
+                # ===== RULE 3: VIDEO ON =====
+                if getattr(user, "video", False):
+                    if uid not in muted_cache:
+                        await vc_mute(call, uid)
                     continue
 
-                # ===== RULE 4: Channel/Bot → MUTE =====
-                if is_channel:
-                    if uid not in muted_users:
-                        await mute(user)
-                    continue
+                # ===== RULE 4: CHANNEL / BOT =====
+                if getattr(user, "peer", None):
+                    if "channel" in str(type(user.peer)).lower():
+                        if uid not in muted_cache:
+                            await vc_mute(call, uid)
+                        continue
 
-        await asyncio.sleep(1)  # fast monitoring
+        except Exception as e:
+            print("[ERROR]", e)
 
-# ====== START ======
+        await asyncio.sleep(CHECK_DELAY)
+
+# ===== AUTO JOIN VC =====
+async def auto_join():
+    try:
+        data = await client(GetGroupCallRequest(GROUP_ID))
+        call = data.call
+
+        await client(JoinGroupCallRequest(
+            call=call,
+            join_as=GROUP_ID,
+            params=b'{}'
+        ))
+
+        print("✅ Joined VC successfully")
+
+    except Exception as e:
+        print("Join VC Error:", e)
+
+# ===== START =====
 async def main():
     async with client:
+        await auto_join()
         await monitor()
 
 if __name__ == "__main__":
