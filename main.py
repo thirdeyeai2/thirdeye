@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from pyrogram import Client
 from pyrogram.raw.functions.channels import GetFullChannel
 from pyrogram.raw.functions.phone import GetGroupCall, EditGroupCallParticipant
@@ -11,7 +12,7 @@ API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 
-CHECK_INTERVAL = 0.5  # ultra-fast, safe for V3
+CHECK_INTERVAL = 1  # ultra-fast, safe for V3
 
 # ================= APP ====================
 # Add sync_time=True to fix msg_id/time issues on Railway
@@ -37,35 +38,50 @@ async def mute_user(call, user_id, mute=True):
         print(f"⚠️ Mute error {user_id}: {e}")
 
 # ----------------- FETCH VC ----------------
+import time
 from pyrogram.errors import PeerIdInvalid
 
+cached_call = None
+last_call_fetch = 0
+
 async def get_group_call():
+    global cached_call, last_call_fetch
+
     try:
-        # Resolve the chat (numeric ID, @username, or invite link)
+        # ✅ Use cache (avoid flood)
+        if time.time() - last_call_fetch < 15 and cached_call:
+            return cached_call
+
+        # Resolve chat (ID / username / link)
         try:
             peer = await app.resolve_peer(GROUP_ID)
         except PeerIdInvalid:
             print(f"⚠️ Invalid GROUP_ID: {GROUP_ID}")
             return None
 
-        # Get full chat info
+        # Get full chat (THIS causes flood if spammed)
         full_chat = await app.invoke(GetFullChannel(channel=peer))
 
-        # Check if a call exists
+        # Check active VC
         call = getattr(full_chat.full_chat, "call", None)
         if not call:
             return None
 
-        # Fetch group call details
+        # Fetch participants
         group_call = await app.invoke(
             GetGroupCall(
                 call=InputGroupCall(
                     id=call.id,
                     access_hash=call.access_hash
                 ),
-                limit=50  # mandatory in Pyrogram 2.x
+                limit=50
             )
         )
+
+        # ✅ Save cache
+        cached_call = group_call
+        last_call_fetch = time.time()
+
         return group_call
 
     except Exception as e:
