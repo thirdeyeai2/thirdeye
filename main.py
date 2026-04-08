@@ -74,7 +74,7 @@ async def get_group_call():
 
 # ----------------- MAIN LOOP ----------------
 async def ultra_loop():
-    print("🚀 Ultra V3 Godd Mode Ghost VC running...")
+    print("🚀 Ultra V3 God Mode Ghost VC running...")
 
     # Start app
     await app.start()
