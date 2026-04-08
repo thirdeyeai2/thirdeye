@@ -4,24 +4,28 @@ import time
 from datetime import datetime
 from pyrogram import Client
 from pyrogram.raw.functions.channels import GetFullChannel
-from pyrogram.raw.functions.phone import GetGroupCall, EditGroupCallParticipant
+from pyrogram.raw.functions.phone import (
+    GetGroupCall,
+    EditGroupCallParticipant,
+    JoinGroupCall
+)
 from pyrogram.raw.types import InputGroupCall
 
 # ================= CONFIG =================
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-GROUP_ID = os.getenv("GROUP_ID")  # @username
+GROUP_ID = os.getenv("GROUP_ID")  # @username only
 
 CHECK_INTERVAL = 1
 
 # ================= APP ====================
 app = Client(
-    "ultra_v5_stealth",
+    "ultra_v5_pro",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    no_updates=True  # 🔥 no peer errors
+    no_updates=True
 )
 
 # ================= STATE ==================
@@ -34,21 +38,11 @@ last_call_fetch = 0
 member_cache = {}
 member_cache_time = {}
 
+vc_joined = False
+
 # ----------------- LOGGER ----------------
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-
-# ----------------- MUTE ----------------
-async def mute_user(call, user_id, mute=True):
-    try:
-        await app.invoke(EditGroupCallParticipant(
-            call=call,
-            participant=user_id,
-            muted=mute
-        ))
-        log(f"{'🔇 Muted' if mute else '🔊 Unmuted'}: {user_id}")
-    except Exception as e:
-        log(f"⚠️ Mute error {user_id}: {e}")
 
 # ----------------- GET VC ----------------
 async def get_group_call():
@@ -81,14 +75,40 @@ async def get_group_call():
         return group_call
 
     except Exception as e:
-        log(f"⚠️ Get VC error: {e}")
+        log(f"⚠️ VC fetch error: {e}")
         return None
 
-# ----------------- MEMBER CHECK (SMART CACHE) ----------------
+# ----------------- JOIN VC (STEALTH CONTROL) ----------------
+async def ensure_vc_join(group_call):
+    global vc_joined
+
+    if vc_joined:
+        return
+
+    try:
+        me = await app.get_me()
+        join_as = await app.resolve_peer(me.id)
+
+        call = group_call.call
+
+        await app.invoke(JoinGroupCall(
+            call=InputGroupCall(id=call.id, access_hash=call.access_hash),
+            join_as=join_as,
+            muted=True,
+            video_stopped=True,
+            params=None
+        ))
+
+        vc_joined = True
+        log("👻 Joined VC (stealth control enabled)")
+
+    except Exception as e:
+        log(f"⚠️ VC join error: {e}")
+
+# ----------------- MEMBER CHECK ----------------
 async def is_valid_member(user_id):
     now = time.time()
 
-    # 🔥 cache for 30 sec
     if user_id in member_cache and now - member_cache_time[user_id] < 30:
         return member_cache[user_id]
 
@@ -108,13 +128,25 @@ async def is_valid_member(user_id):
 
     return result
 
+# ----------------- MUTE ----------------
+async def mute_user(call, user_id, mute=True):
+    try:
+        await app.invoke(EditGroupCallParticipant(
+            call=call,
+            participant=user_id,
+            muted=mute
+        ))
+        log(f"{'🔇 Muted' if mute else '🔊 Unmuted'}: {user_id}")
+    except Exception as e:
+        log(f"⚠️ Mute error {user_id}: {e}")
+
 # ----------------- MAIN LOOP ----------------
-async def ultra_v5():
-    log("🚀 ULTRA V5 STEALTH STARTED")
+async def ultra_v5_pro():
+    log("🚀 ULTRA V5 PRO STARTED")
 
     await app.start()
 
-    # safety join once
+    # join group (mandatory)
     try:
         await app.join_chat(GROUP_ID)
     except:
@@ -128,10 +160,14 @@ async def ultra_v5():
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
+            # 👻 ensure VC join (once only)
+            await ensure_vc_join(group_call)
+
             current_users = {}
 
             for p in group_call.participants:
                 participant = getattr(p, "participant", None)
+
                 if not participant or not hasattr(participant, "user_id"):
                     continue
 
@@ -140,12 +176,12 @@ async def ultra_v5():
 
                 current_users[user_id] = video
 
-                # ⚡ only changes
+                # ⚡ process only changes
                 if user_id not in last_participants or last_participants[user_id] != video:
 
                     valid = await is_valid_member(user_id)
 
-                    # 🚫 not member / channel
+                    # 🚫 non-member / channel
                     if not valid:
                         if user_id not in muted_users:
                             await mute_user(group_call, user_id, True)
@@ -159,7 +195,7 @@ async def ultra_v5():
                             muted_users.add(user_id)
                         continue
 
-                    # 🔊 unmute
+                    # 🔊 auto unmute
                     if user_id in muted_users:
                         await mute_user(group_call, user_id, False)
                         muted_users.remove(user_id)
@@ -179,4 +215,4 @@ async def ultra_v5():
 
 # ----------------- RUN ----------------
 if __name__ == "__main__":
-    asyncio.run(ultra_v5())
+    asyncio.run(ultra_v5_pro())
