@@ -4,14 +4,19 @@ import time
 from datetime import datetime
 from pyrogram import Client
 from pyrogram.raw.functions.channels import GetFullChannel
-from pyrogram.raw.functions.phone import GetGroupCall, EditGroupCallParticipant, JoinGroupCall
+from pyrogram.raw.functions.phone import (
+    GetGroupCall,
+    EditGroupCallParticipant,
+    JoinGroupCall,
+    LeaveGroupCall
+)
 from pyrogram.raw.types import InputGroupCall, DataJSON
 
 # ================= CONFIG =================
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-GROUP_ID = os.getenv("GROUP_ID")  # must be @username
+GROUP_ID = os.getenv("GROUP_ID")  # @username or chat ID
 CHECK_INTERVAL = 1  # seconds
 
 # ================= APP ====================
@@ -28,14 +33,13 @@ muted_users = set()
 last_participants = {}
 cached_call = None
 last_call_fetch = 0
+member_cache = {}
+member_cache_time = {}
 vc_joined = False
 vc_join_attempted = False
 JOIN_AS = None
 
-member_cache = {}
-member_cache_time = {}
-
-# ----------------- LOGGER ----------------
+# ---------------- LOGGER ----------------
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
@@ -52,10 +56,12 @@ async def get_group_call():
         if not call:
             return None
 
-        group_call = await app.invoke(GetGroupCall(
-            call=InputGroupCall(id=call.id, access_hash=call.access_hash),
-            limit=100
-        ))
+        group_call = await app.invoke(
+            GetGroupCall(
+                call=InputGroupCall(id=call.id, access_hash=call.access_hash),
+                limit=100
+            )
+        )
 
         cached_call = group_call
         last_call_fetch = time.time()
@@ -65,16 +71,25 @@ async def get_group_call():
         log(f"⚠️ VC fetch error: {e}")
         return None
 
-# ----------------- SAFE VC JOIN ----------------
-async def join_vc_once(group_call):
+# ----------------- LEAVE OLD VC ----------------
+async def leave_old_vc():
+    try:
+        group_call = await get_group_call()
+        if group_call:
+            await app.invoke(LeaveGroupCall(call=group_call.call))
+            log("✅ Left old VC to prevent SSRC duplicates")
+    except Exception as e:
+        log(f"⚠️ Leave old VC error: {e}")
+
+# ----------------- JOIN VC ONCE ----------------
+async def ensure_vc_join(group_call):
     global vc_joined, vc_join_attempted, JOIN_AS
     if vc_joined or vc_join_attempted:
         return
     vc_join_attempted = True
     try:
-        call = group_call.call
         await app.invoke(JoinGroupCall(
-            call=InputGroupCall(id=call.id, access_hash=call.access_hash),
+            call=group_call.call,
             join_as=JOIN_AS,
             muted=True,
             video_stopped=True,
@@ -83,8 +98,13 @@ async def join_vc_once(group_call):
         vc_joined = True
         log("👻 VC joined successfully")
     except Exception as e:
-        log(f"⚠️ VC join skipped: {e}")
-        await asyncio.sleep(20)  # cooldown to prevent SSRC spam
+        err_str = str(e)
+        if "SSRC_DUPLICATE_MUCH" in err_str:
+            log("⚠️ SSRC duplicate detected, waiting 20s before retry")
+            await asyncio.sleep(20)
+            vc_join_attempted = False  # allow retry safely
+        else:
+            log(f"⚠️ VC join skipped: {e}")
 
 # ----------------- MEMBER CHECK ----------------
 async def is_valid_member(user_id):
@@ -113,75 +133,69 @@ async def mute_user(call, user_id, mute=True):
         log(f"⚠️ Mute error {user_id}: {e}")
 
 # ----------------- MAIN LOOP ----------------
-async def ultra_v5_stable():
-    global JOIN_AS, cached_call, vc_joined, vc_join_attempted
-
+async def ultra_v5():
+    global JOIN_AS
     log("🚀 ULTRA V5 STABLE STARTED")
     await app.start()
+    await leave_old_vc()  # ✅ remove old VC on start
+
+    # join group once safely
+    try:
+        await app.join_chat(GROUP_ID)
+    except:
+        pass
+
     me = await app.get_me()
     JOIN_AS = await app.resolve_peer(me.id)
 
     while True:
         try:
-            # Reset cached call after 60s to prevent stale VC IDs
-            if time.time() - last_call_fetch > 60:
-                cached_call = None
-                vc_joined = False
-                vc_join_attempted = False
-
             group_call = await get_group_call()
             if not group_call or not hasattr(group_call, "participants"):
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
-            # 🔥 join VC safely
-            await join_vc_once(group_call)
+            await ensure_vc_join(group_call)
 
             current_users = {}
             for p in group_call.participants:
                 participant = getattr(p, "participant", None)
                 if not participant or not hasattr(participant, "user_id"):
                     continue
-
                 user_id = participant.user_id
                 video = getattr(participant, "video_enabled", False)
                 current_users[user_id] = video
 
+                # detect change
                 if user_id not in last_participants or last_participants[user_id] != video:
                     valid = await is_valid_member(user_id)
-
-                    # 🚫 non-member / channel
+                    # non-member / channel
                     if not valid:
                         if user_id not in muted_users:
                             await mute_user(group_call, user_id, True)
                             muted_users.add(user_id)
                         continue
-
-                    # 🎥 video ON
-                    if video:
-                        if user_id not in muted_users:
-                            await mute_user(group_call, user_id, True)
-                            muted_users.add(user_id)
+                    # video ON
+                    if video and user_id not in muted_users:
+                        await mute_user(group_call, user_id, True)
+                        muted_users.add(user_id)
                         continue
-
-                    # 🔊 auto unmute
+                    # auto unmute
                     if user_id in muted_users:
                         await mute_user(group_call, user_id, False)
                         muted_users.remove(user_id)
 
-            # cleanup
+            # cleanup old participants
             for old_user in list(last_participants.keys()):
                 if old_user not in current_users:
                     muted_users.discard(old_user)
-
             last_participants.clear()
             last_participants.update(current_users)
 
         except Exception as e:
             log(f"⚠️ Loop error: {e}")
-
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ----------------- RUN ----------------
 if __name__ == "__main__":
-    asyncio.run(ultra_v5_stable())
+    asyncio.run(ultra_v5())
