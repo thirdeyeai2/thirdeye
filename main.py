@@ -1,31 +1,47 @@
 import asyncio
 import os
 import time
+from datetime import datetime
 from pyrogram import Client
 from pyrogram.raw.functions.channels import GetFullChannel
-from pyrogram.raw.functions.phone import GetGroupCall, EditGroupCallParticipant
+from pyrogram.raw.functions.phone import (
+    GetGroupCall,
+    EditGroupCallParticipant,
+    JoinGroupCall,
+    LeaveGroupCall
+)
 from pyrogram.raw.types import InputGroupCall
 
 # ================= CONFIG =================
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-GROUP_ID = os.getenv("GROUP_ID")
+GROUP_ID = os.getenv("GROUP_ID")  # USE @username
 
-CHECK_INTERVAL = 1  # ultra-fast, safe for V3
+CHECK_INTERVAL = 1   # safe speed
+GHOST_DELAY = 0.5    # ghost join time
 
 # ================= APP ====================
-# Add sync_time=True to fix msg_id/time issues on Railway
 app = Client(
-    "ultra_v3_ghost",
+    "ultra_v4_elite",
     api_id=API_ID,
     api_hash=API_HASH,
-    session_string=SESSION_STRING
+    session_string=SESSION_STRING,
+    no_updates=True   # 🔥 CRITICAL FIX
 )
 
+# ================= STATE ==================
 muted_users = set()
+last_participants = {}
 
-# ----------------- MUTE FUNCTION ----------------
+cached_call = None
+last_call_fetch = 0
+
+# ----------------- LOGGER ----------------
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+# ----------------- MUTE ----------------
 async def mute_user(call, user_id, mute=True):
     try:
         await app.invoke(EditGroupCallParticipant(
@@ -33,118 +49,138 @@ async def mute_user(call, user_id, mute=True):
             participant=user_id,
             muted=mute
         ))
-        print(f"{'Muted' if mute else 'Unmuted'} user: {user_id}")
+        log(f"{'🔇 Muted' if mute else '🔊 Unmuted'}: {user_id}")
     except Exception as e:
-        print(f"⚠️ Mute error {user_id}: {e}")
+        log(f"⚠️ Mute error {user_id}: {e}")
 
-# ----------------- FETCH VC ----------------
-import time
-from pyrogram.errors import PeerIdInvalid
-
-cached_call = None
-last_call_fetch = 0
-
+# ----------------- GET VC ----------------
 async def get_group_call():
     global cached_call, last_call_fetch
 
     try:
-        # ✅ Use cache (avoid flood)
         if time.time() - last_call_fetch < 15 and cached_call:
             return cached_call
 
-        # Resolve chat (ID / username / link)
-        try:
-            peer = await app.resolve_peer(GROUP_ID)
-        except PeerIdInvalid:
-            print(f"⚠️ Invalid GROUP_ID: {GROUP_ID}")
-            return None
-
-        # Get full chat (THIS causes flood if spammed)
+        peer = await app.resolve_peer(GROUP_ID)
         full_chat = await app.invoke(GetFullChannel(channel=peer))
 
-        # Check active VC
         call = getattr(full_chat.full_chat, "call", None)
         if not call:
             return None
 
-        # Fetch participants
         group_call = await app.invoke(
             GetGroupCall(
                 call=InputGroupCall(
                     id=call.id,
                     access_hash=call.access_hash
                 ),
-                limit=50
+                limit=100
             )
         )
 
-        # ✅ Save cache
         cached_call = group_call
         last_call_fetch = time.time()
 
         return group_call
 
     except Exception as e:
-        print(f"⚠️ Get VC error: {e}")
+        log(f"⚠️ Get VC error: {e}")
         return None
 
-# ----------------- MAIN LOOP ----------------
-async def ultra_loop():
-    print("🚀 Ultra V3 God Mode Ghost VC running...")
+# ----------------- GHOST JOIN ----------------
+async def ghost_cycle(call):
+    try:
+        await app.invoke(JoinGroupCall(
+            call=call,
+            muted=True,
+            video_stopped=True,
+            params=b""
+        ))
+        await asyncio.sleep(GHOST_DELAY)
+        await app.invoke(LeaveGroupCall(call=call))
+        log("👻 Ghost cycle executed")
+    except Exception as e:
+        log(f"⚠️ Ghost error: {e}")
 
-    # Start app
+# ----------------- MAIN LOOP ----------------
+async def ultra_v4_elite():
+    log("🚀 ULTRA V4 ELITE STARTED")
+
     await app.start()
+
+    # Ensure joined group (run once safety)
+    try:
+        await app.join_chat(GROUP_ID)
+    except:
+        pass
 
     while True:
         try:
             group_call = await get_group_call()
+
             if not group_call or not hasattr(group_call, "participants"):
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
+            # 👻 Ghost monitoring
+            await ghost_cycle(group_call)
+
+            current_users = {}
+
             for p in group_call.participants:
-                # Pyrogram 2.x: participant info is inside p.participant
                 participant = getattr(p, "participant", None)
                 if not participant or not hasattr(participant, "user_id"):
                     continue
 
                 user_id = participant.user_id
+                video = getattr(participant, "video_enabled", False)
 
-                # fetch member info
-                try:
-                    member = await app.get_chat_member(GROUP_ID, user_id)
-                except:
-                    continue
+                current_users[user_id] = video
 
-                # skip admins/creators
-                if member.status in ["administrator", "creator"]:
-                    continue
+                # 🔥 process only changes
+                if user_id not in last_participants or last_participants[user_id] != video:
 
-                # mute non-members
-                if not member.is_member:
-                    if user_id not in muted_users:
-                        await mute_user(group_call, user_id, True)
-                        muted_users.add(user_id)
-                    continue
+                    try:
+                        member = await app.get_chat_member(GROUP_ID, user_id)
+                    except:
+                        continue
 
-                # mute if video enabled
-                video_enabled = getattr(participant, "video_enabled", False)
-                if video_enabled:
-                    if user_id not in muted_users:
-                        await mute_user(group_call, user_id, True)
-                        muted_users.add(user_id)
-                    continue
+                    # 👑 skip admins
+                    if member.status in ["administrator", "creator"]:
+                        continue
 
-                # auto unmute when joining
-                if user_id in muted_users and member.is_member:
-                    await mute_user(group_call, user_id, False)
-                    muted_users.remove(user_id)
+                    # 🚫 not member / channel account
+                    if not member.is_member:
+                        if user_id not in muted_users:
+                            await mute_user(group_call, user_id, True)
+                            muted_users.add(user_id)
+                        continue
+
+                    # 🎥 video ON
+                    if video:
+                        if user_id not in muted_users:
+                            await mute_user(group_call, user_id, True)
+                            muted_users.add(user_id)
+                        continue
+
+                    # 🔊 auto unmute
+                    if user_id in muted_users:
+                        await mute_user(group_call, user_id, False)
+                        muted_users.remove(user_id)
+
+            # 🧹 cleanup left users
+            for old_user in list(last_participants.keys()):
+                if old_user not in current_users:
+                    muted_users.discard(old_user)
+
+            last_participants.clear()
+            last_participants.update(current_users)
 
         except Exception as e:
-            print(f"⚠️ Ultra loop error: {e}")
+            log(f"⚠️ Loop error: {e}")
 
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ----------------- RUN ----------------
 if __name__ == "__main__":
-    asyncio.run(ultra_loop())
+    asyncio.run(ultra_v4_elite())
