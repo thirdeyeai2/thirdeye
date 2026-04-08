@@ -10,7 +10,7 @@ from pyrogram.raw.types import InputGroupCall
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-GROUP_ID = int(os.getenv("GROUP_ID"))
+GROUP_ID = os.getenv("GROUP_ID")
 
 CHECK_INTERVAL = 1  # ultra-fast, safe for V3
 
