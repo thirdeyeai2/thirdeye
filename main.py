@@ -15,13 +15,14 @@ from pyrogram.raw.types import InputGroupCall, DataJSON
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-GROUP_ID = os.getenv("GROUP_ID")  # ONLY @username
+GROUP_ID = os.getenv("GROUP_ID")  # @username
 
 CHECK_INTERVAL = 1
+JOIN_COOLDOWN = 300  # 5 min retry
 
 # ================= APP ====================
 app = Client(
-    "ultra_v5_final",
+    "ultra_v5_pro",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
@@ -39,15 +40,15 @@ member_cache = {}
 member_cache_time = {}
 
 vc_joined = False
-vc_join_attempted = False
+last_join_time = 0
 
 JOIN_AS = None
 
-# ----------------- LOGGER ----------------
+# ---------------- LOGGER ----------------
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ----------------- GET VC ----------------
+# ---------------- GET VC ----------------
 async def get_group_call():
     global cached_call, last_call_fetch
 
@@ -81,14 +82,18 @@ async def get_group_call():
         log(f"⚠️ VC fetch error: {e}")
         return None
 
-# ----------------- JOIN VC (SAFE ONCE) ----------------
+# ---------------- JOIN VC SAFE ----------------
 async def ensure_vc_join(group_call):
-    global vc_joined, vc_join_attempted, JOIN_AS
+    global vc_joined, last_join_time, JOIN_AS
 
-    if vc_joined or vc_join_attempted:
+    if vc_joined:
         return
 
-    vc_join_attempted = True  # 🔥 prevent spam
+    # ⛔ retry cooldown
+    if time.time() - last_join_time < JOIN_COOLDOWN:
+        return
+
+    last_join_time = time.time()
 
     try:
         call = group_call.call
@@ -105,13 +110,14 @@ async def ensure_vc_join(group_call):
         log("👻 VC joined successfully")
 
     except Exception as e:
+        vc_joined = False
         log(f"⚠️ VC join skipped: {e}")
 
-# ----------------- MEMBER CHECK ----------------
+# ---------------- MEMBER CHECK ----------------
 async def is_valid_member(user_id):
     now = time.time()
 
-    if user_id in member_cache and now - member_cache_time[user_id] < 30:
+    if user_id in member_cache and now - member_cache_time[user_id] < 60:
         return member_cache[user_id]
 
     try:
@@ -130,33 +136,38 @@ async def is_valid_member(user_id):
 
     return result
 
-# ----------------- MUTE ----------------
+# ---------------- MUTE ----------------
 async def mute_user(call, user_id, mute=True):
     try:
         await app.invoke(EditGroupCallParticipant(
-            call=call.call,  # 🔥 important fix
+            call=call.call,
             participant=user_id,
             muted=mute
         ))
-        log(f"{'🔇 Muted' if mute else '🔊 Unmuted'}: {user_id}")
+
+        if mute:
+            log(f"🔇 Muted: {user_id}")
+        else:
+            log(f"🔊 Unmuted: {user_id}")
+
     except Exception as e:
         log(f"⚠️ Mute error {user_id}: {e}")
 
-# ----------------- MAIN LOOP ----------------
+# ---------------- MAIN LOOP ----------------
 async def ultra_v5():
     global JOIN_AS
 
-    log("🚀 ULTRA V5 FINAL STARTED")
+    log("🚀 ULTRA V5 PRO STARTED")
 
     await app.start()
 
-    # join group once
+    # join group (safe)
     try:
         await app.join_chat(GROUP_ID)
     except:
         pass
 
-    # 🔥 cache self peer (avoid flood)
+    # cache self peer
     me = await app.get_me()
     JOIN_AS = await app.resolve_peer(me.id)
 
@@ -168,7 +179,7 @@ async def ultra_v5():
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
 
-            # 👻 join VC once (safe)
+            # 👻 safe join
             await ensure_vc_join(group_call)
 
             current_users = {}
@@ -184,6 +195,7 @@ async def ultra_v5():
 
                 current_users[user_id] = video
 
+                # detect change only
                 if user_id not in last_participants or last_participants[user_id] != video:
 
                     valid = await is_valid_member(user_id)
@@ -207,7 +219,7 @@ async def ultra_v5():
                         await mute_user(group_call, user_id, False)
                         muted_users.remove(user_id)
 
-            # cleanup
+            # cleanup left users
             for old_user in list(last_participants.keys()):
                 if old_user not in current_users:
                     muted_users.discard(old_user)
@@ -220,6 +232,6 @@ async def ultra_v5():
 
         await asyncio.sleep(CHECK_INTERVAL)
 
-# ----------------- RUN ----------------
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     asyncio.run(ultra_v5())
