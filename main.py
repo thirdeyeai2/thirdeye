@@ -90,15 +90,24 @@ async def get_group_call():
 # ----------------- GHOST JOIN ----------------
 async def ghost_cycle(call):
     try:
+        # 🔥 get your own peer (important)
+        me = await app.get_me()
+        join_as = await app.resolve_peer(me.id)
+
         await app.invoke(JoinGroupCall(
             call=call,
+            join_as=join_as,   # ✅ FIX HERE
             muted=True,
             video_stopped=True,
             params=b""
         ))
+
         await asyncio.sleep(GHOST_DELAY)
+
         await app.invoke(LeaveGroupCall(call=call))
+
         log("👻 Ghost cycle executed")
+
     except Exception as e:
         log(f"⚠️ Ghost error: {e}")
 
