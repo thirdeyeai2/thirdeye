@@ -37,25 +37,35 @@ async def mute_user(call, user_id, mute=True):
         print(f"⚠️ Mute error {user_id}: {e}")
 
 # ----------------- FETCH VC ----------------
+from pyrogram.errors import PeerIdInvalid
+
 async def get_group_call():
     try:
-        full_chat = await app.invoke(
-            GetFullChannel(channel=await app.resolve_peer(GROUP_ID))
-        )
+        # Resolve the chat (numeric ID, @username, or invite link)
+        try:
+            peer = await app.resolve_peer(GROUP_ID)
+        except PeerIdInvalid:
+            print(f"⚠️ Invalid GROUP_ID: {GROUP_ID}")
+            return None
 
-        call = full_chat.full_chat.call
+        # Get full chat info
+        full_chat = await app.invoke(GetFullChannel(channel=peer))
+
+        # Check if a call exists
+        call = getattr(full_chat.full_chat, "call", None)
         if not call:
             return None
 
+        # Fetch group call details
         group_call = await app.invoke(
-    GetGroupCall(
-        call=InputGroupCall(
-            id=call.id,
-            access_hash=call.access_hash
-        ),
-        limit=50  # fetch up to 50 participants at once (adjust if needed)
-    )
-)
+            GetGroupCall(
+                call=InputGroupCall(
+                    id=call.id,
+                    access_hash=call.access_hash
+                ),
+                limit=50  # mandatory in Pyrogram 2.x
+            )
+        )
         return group_call
 
     except Exception as e:
