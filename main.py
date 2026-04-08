@@ -79,6 +79,8 @@ async def get_group_call():
         return None
 
 # ----------------- JOIN VC (STEALTH CONTROL) ----------------
+from pyrogram.raw.types import DataJSON
+
 async def ensure_vc_join(group_call):
     global vc_joined
 
@@ -91,12 +93,15 @@ async def ensure_vc_join(group_call):
 
         call = group_call.call
 
+        # 🔥 REQUIRED PARAMS (REAL FIX)
+        params = DataJSON(data='{"U":"1"}')
+
         await app.invoke(JoinGroupCall(
             call=InputGroupCall(id=call.id, access_hash=call.access_hash),
             join_as=join_as,
             muted=True,
             video_stopped=True,
-            params=None
+            params=params   # ✅ FIXED
         ))
 
         vc_joined = True
