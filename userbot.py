@@ -9,7 +9,7 @@ from pyrogram.raw.types import InputGroupCall
 # --- ENVIRONMENT VARIABLES ---
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-STRING = os.getenv("STRING_SESSION")
+SESSION_STRING = os.getenv("SESSION_STRING")
 
 app = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=STRING)
 
