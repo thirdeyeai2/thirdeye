@@ -72,6 +72,8 @@ async def is_member(user_id):
 # ---------------- ELITE VC LOOP ----------------
 async def vc_loop():
     muted = set()
+    approved = set()
+    member_cache = {}
 
     while True:
         data = load()
@@ -83,7 +85,6 @@ async def vc_loop():
         try:
             chat_id = data["group_id"]
 
-            # 🔥 SAFE VC CHECK (NO full_chat)
             try:
                 call = await app.invoke(
                     GetGroupCall(
@@ -98,44 +99,79 @@ async def vc_loop():
                 await asyncio.sleep(3)
                 continue
 
-            # No participants safety check
-            if not hasattr(call, "participants"):
+            participants = getattr(call, "participants", None)
+            if not participants:
                 await asyncio.sleep(2)
                 continue
 
-            for p in call.participants:
+            current_users = set()
 
-                # skip invalid peers
+            for p in participants:
+
                 if not hasattr(p.peer, "user_id"):
                     continue
 
                 user_id = p.peer.user_id
+                current_users.add(user_id)
 
-                # skip admins
-                if await is_admin(user_id):
-                    continue
+                # ---------------- CACHE MEMBER CHECK ----------------
+                if user_id in member_cache:
+                    is_member = member_cache[user_id]
+                else:
+                    try:
+                        m = await app.get_chat_member(chat_id, user_id)
+                        is_member = True
+                        member_cache[user_id] = True
+                    except:
+                        is_member = False
+                        member_cache[user_id] = False
 
-                member = await is_member(user_id)
+                # ---------------- ADMIN SKIP ----------------
+                try:
+                    m = await app.get_chat_member(chat_id, user_id)
+                    if m.status in ("administrator", "creator"):
+                        continue
+                except:
+                    pass
 
-                # mute non-members
-                if data.get("mute_non_members") and not member:
+                # ---------------- VIDEO CHECK ----------------
+                video_on = getattr(p, "video", False) or getattr(p, "presentation", False)
+
+                # ---------------- RULE ENGINE ----------------
+                should_allow = True
+
+                # Rule 1: Non-member
+                if data.get("mute_non_members") and not is_member:
+                    should_allow = False
+
+                # Rule 2: Video restriction
+                if data.get("mute_video") and video_on:
+                    should_allow = False
+
+                # Rule 3: Channel restriction (if available)
+                if data.get("mute_channel") and hasattr(p.peer, "channel_id"):
+                    should_allow = False
+
+                # ---------------- APPLY ACTION ----------------
+                if should_allow:
+                    if user_id not in approved:
+                        await unrestrict(user_id)
+                        approved.add(user_id)
+                        muted.discard(user_id)
+                else:
                     if user_id not in muted:
                         await restrict(user_id)
                         muted.add(user_id)
+                        approved.discard(user_id)
 
-                # unmute if returned
-                if member and user_id in muted:
-                    await unrestrict(user_id)
-                    muted.remove(user_id)
+            # ---------------- CLEANUP (LEFT VC USERS) ----------------
+            left_users = (muted | approved) - current_users
 
-                # video mute
-                if data.get("mute_video") and getattr(p, "video", False):
-                    await restrict(user_id)
+            for uid in left_users:
+                muted.discard(uid)
+                approved.discard(uid)
 
             await asyncio.sleep(1)
-
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
 
         except Exception as e:
             print("VC ERROR:", e)
