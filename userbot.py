@@ -6,29 +6,33 @@ from pyrogram.errors import FloodWait
 from pyrogram.raw.functions.phone import GetGroupCall
 from pyrogram.raw.types import InputGroupCall
 
-# --- ENVIRONMENT VARIABLES ---
+# ---------------- ENV ----------------
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 
-app = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+app = Client(
+    "userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
+)
 
-# Load config.json
+# ---------------- CONFIG ----------------
 def load():
     return json.load(open("config.json"))
 
-# Logging function
 async def log(text):
-    data = load()
     try:
+        data = load()
         await app.send_message(data["log_chat_id"], text)
     except:
         pass
 
-# Restrict user (mute)
+# ---------------- ACTIONS ----------------
 async def restrict(user_id):
-    data = load()
     try:
+        data = load()
         await app.restrict_chat_member(
             data["group_id"],
             user_id,
@@ -40,38 +44,32 @@ async def restrict(user_id):
     except:
         pass
 
-# Unrestrict user (unmute)
 async def unrestrict(user_id):
-    data = load()
     try:
-        await app.promote_chat_member(
-            data["group_id"],
-            user_id,
-            can_send_messages=True
-        )
+        data = load()
+        await app.unban_chat_member(data["group_id"], user_id)
         await log(f"🔊 Unmuted: {user_id}")
     except:
         pass
 
-# Check if user is admin
+# ---------------- CHECKERS ----------------
 async def is_admin(user_id):
-    data = load()
     try:
-        member = await app.get_chat_member(data["group_id"], user_id)
-        return member.status in ("administrator", "creator")
+        data = load()
+        m = await app.get_chat_member(data["group_id"], user_id)
+        return m.status in ("administrator", "creator")
     except:
         return False
 
-# Check if user is a member
 async def is_member(user_id):
-    data = load()
     try:
+        data = load()
         await app.get_chat_member(data["group_id"], user_id)
         return True
     except:
         return False
 
-# Main VC protection loop
+# ---------------- ELITE VC LOOP ----------------
 async def vc_loop():
     muted = set()
 
@@ -83,61 +81,70 @@ async def vc_loop():
             continue
 
         try:
-            chat = await app.get_chat(data["group_id"])
+            chat_id = data["group_id"]
 
-            if not chat.full_chat or not getattr(chat.full_chat, "call", None):
+            # 🔥 SAFE VC CHECK (NO full_chat)
+            try:
+                call = await app.invoke(
+                    GetGroupCall(
+                        call=InputGroupCall(
+                            id=chat_id,
+                            access_hash=0
+                        ),
+                        limit=100
+                    )
+                )
+            except:
+                await asyncio.sleep(3)
+                continue
+
+            # No participants safety check
+            if not hasattr(call, "participants"):
                 await asyncio.sleep(2)
                 continue
 
-            call = chat.full_chat.call
-            group_call = InputGroupCall(id=call.id, access_hash=call.access_hash)
+            for p in call.participants:
 
-            result = await app.invoke(GetGroupCall(call=group_call, limit=100))
-
-            for p in result.participants:
-
-                # Skip non-user peers
+                # skip invalid peers
                 if not hasattr(p.peer, "user_id"):
                     continue
 
                 user_id = p.peer.user_id
 
-                # Skip admins
+                # skip admins
                 if await is_admin(user_id):
-                    continue
-
-                # Channel detection
-                if hasattr(p.peer, "channel_id") and data.get("mute_channel"):
-                    await restrict(user_id)
                     continue
 
                 member = await is_member(user_id)
 
-                # Non-member
+                # mute non-members
                 if data.get("mute_non_members") and not member:
                     if user_id not in muted:
                         await restrict(user_id)
                         muted.add(user_id)
 
-                # Member join → unmute
+                # unmute if returned
                 if member and user_id in muted:
                     await unrestrict(user_id)
                     muted.remove(user_id)
 
-                # Video detection
+                # video mute
                 if data.get("mute_video") and getattr(p, "video", False):
                     await restrict(user_id)
 
             await asyncio.sleep(1)
 
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+
         except Exception as e:
-            print("Error:", e)
+            print("VC ERROR:", e)
             await asyncio.sleep(3)
 
-# Main start
+# ---------------- MAIN ----------------
 async def main():
     await app.start()
-    print("🔥 USERBOT RUNNING")
+    print("🔥 ELITE VC ENGINE RUNNING (STABLE MODE)")
     await vc_loop()
 
 app.run(main())
