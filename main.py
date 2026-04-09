@@ -1,6 +1,5 @@
 import asyncio
 import os
-import time
 from datetime import datetime
 from pyrogram import Client
 from pyrogram.raw.functions.channels import GetFullChannel
@@ -14,11 +13,12 @@ SESSION_STRING = os.getenv("SESSION_STRING")
 GROUP_ID = os.getenv("GROUP_ID")  # @username or -100id
 
 CHECK_INTERVAL = 2
-JOIN_DELAY = 12  # 🔥 important for SSRC fix
+JOIN_DELAY = 12  # SSRC protection
+RETRY_DELAY = 5  # If VC is unavailable
 
 # ================= APP ====================
 app = Client(
-    "ultra_v5_final",
+    "ultra_v5_auto",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
@@ -43,7 +43,6 @@ async def get_vc():
         call = getattr(full.full_chat, "call", None)
         if not call:
             return None
-
         return await app.invoke(
             GetGroupCall(
                 call=InputGroupCall(id=call.id, access_hash=call.access_hash),
@@ -57,7 +56,6 @@ async def get_vc():
 # ================= SAFE JOIN =================
 async def join_vc(vc):
     global vc_joined, joining
-
     if vc_joined or joining:
         return
 
@@ -68,7 +66,7 @@ async def join_vc(vc):
     try:
         await app.invoke(
             JoinGroupCall(
-                call=InputGroupCall(id=vc.call.id, vc.call.access_hash),
+                call=InputGroupCall(id=vc.call.id, access_hash=vc.call.access_hash),
                 join_as=JOIN_AS,
                 muted=True,
                 video_stopped=True,
@@ -79,7 +77,6 @@ async def join_vc(vc):
         log("✅ Joined VC successfully")
     except Exception as e:
         log(f"⚠️ Join skipped: {e}")
-
     joining = False
 
 # ================= MEMBER CHECK =================
@@ -104,17 +101,17 @@ async def mute(vc, user_id, state=True):
     except Exception as e:
         log(f"⚠️ Mute error {user_id}: {e}")
 
-# ================= MAIN LOOP =================
+# ================= AUTO-REJOIN LOOP =================
 async def main():
     global JOIN_AS, vc_joined
 
-    log("🚀 ULTRA V5 FINAL STARTED")
+    log("🚀 ULTRA V5 AUTO-REJOIN STARTED")
     await app.start()
 
     me = await app.get_me()
     JOIN_AS = await app.resolve_peer(me.id)
 
-    # Join group (safe)
+    # Join group safely
     try:
         await app.join_chat(GROUP_ID)
     except:
@@ -126,9 +123,11 @@ async def main():
 
             if not vc:
                 vc_joined = False
-                await asyncio.sleep(CHECK_INTERVAL)
+                log(f"⚠️ VC not available, retrying in {RETRY_DELAY}s...")
+                await asyncio.sleep(RETRY_DELAY)
                 continue
 
+            # Safe join
             await join_vc(vc)
 
             if not vc_joined:
@@ -149,25 +148,33 @@ async def main():
                 video = getattr(part, "video_enabled", False)
 
                 # 🔴 Non-member mute
-                if not valid:
-                    if uid not in muted_users:
-                        await mute(vc, uid, True)
-                        muted_users.add(uid)
+                if not valid and uid not in muted_users:
+                    await mute(vc, uid, True)
+                    muted_users.add(uid)
                     continue
 
                 # 🎥 Video ON mute
-                if video:
-                    if uid not in muted_users:
-                        await mute(vc, uid, True)
-                        muted_users.add(uid)
+                if video and uid not in muted_users:
+                    await mute(vc, uid, True)
+                    muted_users.add(uid)
                     continue
 
-                # 🔊 Auto unmute
-                if uid in muted_users:
+                # 🔇 Channel/bot account mute
+                try:
+                    user = await app.get_users(uid)
+                    if getattr(user, "is_bot", False) and uid not in muted_users:
+                        await mute(vc, uid, True)
+                        muted_users.add(uid)
+                        continue
+                except:
+                    pass
+
+                # 🔊 Auto unmute valid users
+                if uid in muted_users and valid and not video:
                     await mute(vc, uid, False)
                     muted_users.remove(uid)
 
-            # cleanup
+            # Cleanup
             muted_users.intersection_update(current_users)
 
         except Exception as e:
