@@ -108,26 +108,48 @@ async def vc_join_handler(event):
 
     active_calls[str(config.GROUP_ID)] = call
 
+    # 🔥 Ensure cache is fresh
+    await refresh_cache(call)
+
     for participant in event.participants:
         if participant.left:
             continue
 
         peer_obj = participant.peer
 
-        # ===== CHANNEL AUTO MUTE =====
+        # ===== CHANNEL AUTO MUTE (FIXED) =====
         if isinstance(peer_obj, types.PeerChannel):
             print(f"[CHANNEL] {peer_obj.channel_id} → Muting")
 
             try:
+                entity = await assistant.get_input_entity(peer_obj.channel_id)
+
                 await assistant(functions.phone.EditGroupCallParticipantRequest(
                     call=call,
-                    participant=peer_obj,
+                    participant=entity,
                     muted=True
                 ))
-                print(f"[SUCCESS] Channel muted")
+
+                print("[SUCCESS] Channel muted")
 
             except Exception as e:
-                print(f"[ERROR] Channel mute failed: {e}")
+                print(f"[CHANNEL ERROR] {e}")
+
+                try:
+                    await refresh_cache(call)
+
+                    entity = await assistant.get_input_entity(peer_obj.channel_id)
+
+                    await assistant(functions.phone.EditGroupCallParticipantRequest(
+                        call=call,
+                        participant=entity,
+                        muted=True
+                    ))
+
+                    print("[SUCCESS] Channel muted after refresh")
+
+                except Exception as e:
+                    print(f"[FINAL FAIL] {e}")
 
             continue
 
@@ -138,7 +160,7 @@ async def vc_join_handler(event):
             if user_id in [assistant_id, bot_id]:
                 continue
 
-            # 🔍 CHECK ADMIN
+            # 🔍 ADMIN CHECK
             is_admin = False
             try:
                 p = await assistant(functions.channels.GetParticipantRequest(
@@ -157,12 +179,18 @@ async def vc_join_handler(event):
                 await safe_edit(call, peer_obj, True)
                 continue
 
-            # 🎥 VIDEO / SCREEN SHARE CHECK
-            video_on = getattr(participant, "video", False)
-            screen_on = getattr(participant, "presentation", False)
+            # 🎥 VIDEO / SCREEN SHARE DETECTION (FIXED)
+            video_on = False
+            screen_on = False
+
+            if hasattr(participant, "video") and participant.video:
+                video_on = True
+
+            if hasattr(participant, "presentation") and participant.presentation:
+                screen_on = True
 
             if (video_on or screen_on) and not is_admin:
-                print(f"[MEDIA BLOCK] {user_id} → Video/Screen ON → Muting")
+                print(f"[MEDIA BLOCK] {user_id} → Muting")
                 await safe_edit(call, peer_obj, True)
                 continue
 
