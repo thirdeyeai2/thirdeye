@@ -14,7 +14,16 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 bot = TelegramClient('bot_session', config.API_ID, config.API_HASH, loop=loop)
-assistant = TelegramClient(StringSession(config.SESSION_STRING), config.API_ID, config.API_HASH, loop=loop)
+assistant = TelegramClient(
+    "assistant_session",
+    config.API_ID,
+    config.API_HASH,
+    loop=loop,
+    auto_reconnect=True,
+    connection_retries=None,
+    retry_delay=3,
+    request_retries=5
+)
 
 assistant_id = None
 bot_id = None
