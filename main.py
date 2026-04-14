@@ -19,10 +19,7 @@ assistant = TelegramClient(
     config.API_ID,
     config.API_HASH,
     loop=loop,
-    auto_reconnect=True,
-    connection_retries=None,
-    retry_delay=3,
-    request_retries=5
+    auto_reconnect=True
 )
 
 assistant_id = None
