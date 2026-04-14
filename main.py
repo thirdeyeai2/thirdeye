@@ -20,8 +20,8 @@ assistant_id = None
 bot_id = None
 last_refresh = 0
 
-# FIX 1: define active_calls
 active_calls = {}
+recent_joins = set()
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -63,7 +63,7 @@ async def refresh_cache(call):
             print(f"[CACHE ERROR] {e}")
 
 # ==========================================
-# SAFE EDIT
+# SAFE MUTE / UNMUTE
 # ==========================================
 async def safe_edit(call, peer, mute=True):
     if not call:
@@ -100,99 +100,81 @@ async def vc_join_handler(event):
     call = event.call
 
     # store call
-    active_calls[config.GROUP_ID] = call
+    active_calls[str(config.GROUP_ID)] = call
 
     for participant in event.participants:
-        if not participant.left:
-            peer_obj = participant.peer
+        if participant.left:
+            continue
 
-            # --- FEATURE 2: PERMANENT CHANNEL MUTE ---
-            if isinstance(peer_obj, types.PeerChannel):
-                print(f"[FEATURE 2] Channel detected (ID: {peer_obj.channel_id}) → muting")
+        peer_obj = participant.peer
 
-                try:
-                    await assistant(functions.phone.EditGroupCallParticipantRequest(
-                        call=call,
-                        participant=peer_obj,
-                        muted=True
-                    ))
-                    print(f"[SUCCESS] Channel {peer_obj.channel_id} muted")
+        # ===== CHANNEL AUTO MUTE =====
+        if isinstance(peer_obj, types.PeerChannel):
+            print(f"[CHANNEL] {peer_obj.channel_id} → Muting")
 
-                except ValueError:
-                    print(f"[CACHE REFRESH] Unknown channel {peer_obj.channel_id}")
+            try:
+                await assistant(functions.phone.EditGroupCallParticipantRequest(
+                    call=call,
+                    participant=peer_obj,
+                    muted=True
+                ))
+                print(f"[SUCCESS] Channel muted")
 
-                    try:
-                        await assistant(functions.phone.GetGroupParticipantsRequest(
-                            call=call,
-                            ids=[],
-                            sources=[],
-                            offset='',
-                            limit=100
-                        ))
+            except Exception as e:
+                print(f"[ERROR] Channel mute failed: {e}")
 
-                        await assistant(functions.phone.EditGroupCallParticipantRequest(
-                            call=call,
-                            participant=peer_obj,
-                            muted=True
-                        ))
+            continue
 
-                        print(f"[SUCCESS] Channel {peer_obj.channel_id} muted after refresh")
+        # ===== USER =====
+        if isinstance(peer_obj, types.PeerUser):
+            user_id = peer_obj.user_id
 
-                    except Exception as e:
-                        print(f"[ERROR] Channel mute failed: {e}")
-
-                except Exception as e:
-                    print(f"[ERROR] Failed to mute channel: {e}")
-
+            if user_id in [assistant_id, bot_id]:
                 continue
 
-            # ===== USER =====
-            if isinstance(peer_obj, types.PeerUser):
-                user_id = peer_obj.user_id
+            # AUTO UNMUTE LOGIC
+            if user_id in recent_joins:
+                print(f"[AUTO UNMUTE] {user_id}")
+                await safe_edit(call, peer_obj, False)
+                recent_joins.remove(user_id)
+                continue
 
-                if user_id in [assistant_id, bot_id]:
-                    continue
+            # NORMAL MEMBER CHECK
+            try:
+                await assistant(functions.channels.GetParticipantRequest(
+                    channel=config.GROUP_ID,
+                    participant=user_id
+                ))
+                print(f"[OK] {user_id} is member")
 
-                try:
-                    await assistant(functions.channels.GetParticipantRequest(
-                        channel=config.GROUP_ID,
-                        participant=user_id
-                    ))
-                    print(f"[OK] {user_id} is member")
-
-                except:
-                    print(f"[INTRUDER] {user_id} → Muting")
-                    await safe_edit(call, peer_obj, True)
+            except:
+                print(f"[INTRUDER] {user_id} → Muting")
+                await safe_edit(call, peer_obj, True)
 
 # ==========================================
-# AUTO UNMUTE
+# GROUP JOIN TRACK
 # ==========================================
 @bot.on(events.ChatAction(chats=config.GROUP_ID))
 async def group_join_handler(event):
     if event.user_joined or event.user_added:
         user_id = event.user_id
 
-        print(f"[JOIN] {user_id}")
+        print(f"[JOIN DETECTED] {user_id}")
 
-        try:
-            full_chat = await assistant(functions.channels.GetFullChannelRequest(config.GROUP_ID))
-            call = full_chat.full_chat.call
-
-            if not call:
-                return
-
-            entity = await get_entity_safe(user_id)
-            if not entity:
-                return
-
-            print(f"[UNMUTE] {user_id}")
-            await safe_edit(call, entity, False)
-
-        except Exception as e:
-            print(f"[UNMUTE ERROR] {e}")
+        # store for auto unmute
+        recent_joins.add(user_id)
 
 # ==========================================
-# WEB SERVER (Heroku keep alive)
+# CLEAN OLD JOINS (OPTIONAL SAFETY)
+# ==========================================
+async def clear_old_joins():
+    while True:
+        await asyncio.sleep(300)
+        recent_joins.clear()
+        print("[CLEANUP] recent joins cleared")
+
+# ==========================================
+# WEB SERVER (KEEP ALIVE)
 # ==========================================
 async def web_server():
     async def handle(request):
@@ -223,6 +205,9 @@ async def main():
 
     await web_server()
 
+    # start cleanup task
+    asyncio.create_task(clear_old_joins())
+
     print("🛡️ VC AUTO MUTE SYSTEM ACTIVE 🛡️")
 
     await asyncio.gather(
@@ -230,5 +215,8 @@ async def main():
         assistant.run_until_disconnected()
     )
 
+# ==========================================
+# ENTRY
+# ==========================================
 if __name__ == "__main__":
     loop.run_until_complete(main())
