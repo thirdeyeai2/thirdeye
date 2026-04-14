@@ -21,7 +21,6 @@ bot_id = None
 last_refresh = 0
 
 active_calls = {}
-recent_joins = set()
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -99,7 +98,6 @@ async def safe_edit(call, peer, mute=True):
 async def vc_join_handler(event):
     call = event.call
 
-    # store call
     active_calls[str(config.GROUP_ID)] = call
 
     for participant in event.participants:
@@ -132,53 +130,42 @@ async def vc_join_handler(event):
             if user_id in [assistant_id, bot_id]:
                 continue
 
-            # AUTO UNMUTE LOGIC
-            if user_id in recent_joins:
-                print(f"[AUTO UNMUTE] {user_id}")
-                await safe_edit(call, peer_obj, False)
-                recent_joins.remove(user_id)
-                continue
-
-            # NORMAL MEMBER CHECK
+            # 🔍 CHECK ADMIN
+            is_admin = False
             try:
-                await assistant(functions.channels.GetParticipantRequest(
+                p = await assistant(functions.channels.GetParticipantRequest(
                     channel=config.GROUP_ID,
                     participant=user_id
                 ))
-                print(f"[OK] {user_id} is member")
+
+                if isinstance(p.participant, (
+                    types.ChannelParticipantAdmin,
+                    types.ChannelParticipantCreator
+                )):
+                    is_admin = True
 
             except:
                 print(f"[INTRUDER] {user_id} → Muting")
                 await safe_edit(call, peer_obj, True)
+                continue
 
-# ==========================================
-# GROUP JOIN TRACK
-# ==========================================
-@bot.on(events.ChatAction(chats=config.GROUP_ID))
-async def group_join_handler(event):
-    if event.user_joined or event.user_added:
-        user_id = event.user_id
+            # 🎥 VIDEO / SCREEN SHARE CHECK
+            video_on = getattr(participant, "video", False)
+            screen_on = getattr(participant, "presentation", False)
 
-        print(f"[JOIN DETECTED] {user_id}")
+            if (video_on or screen_on) and not is_admin:
+                print(f"[MEDIA BLOCK] {user_id} → Video/Screen ON → Muting")
+                await safe_edit(call, peer_obj, True)
+                continue
 
-        # store for auto unmute
-        recent_joins.add(user_id)
-
-# ==========================================
-# CLEAN OLD JOINS (OPTIONAL SAFETY)
-# ==========================================
-async def clear_old_joins():
-    while True:
-        await asyncio.sleep(300)
-        recent_joins.clear()
-        print("[CLEANUP] recent joins cleared")
+            print(f"[OK] {user_id} is member")
 
 # ==========================================
 # WEB SERVER (KEEP ALIVE)
 # ==========================================
 async def web_server():
     async def handle(request):
-        return web.Response(text="VC Bot Running")
+        return web.Response(text="VC Bot Running ✅")
 
     app = web.Application()
     app.add_routes([web.get('/', handle)])
@@ -205,10 +192,7 @@ async def main():
 
     await web_server()
 
-    # start cleanup task
-    asyncio.create_task(clear_old_joins())
-
-    print("🛡️ VC AUTO MUTE SYSTEM ACTIVE 🛡️")
+    print("🛡️ VC AUTO CONTROL SYSTEM ACTIVE 🛡️")
 
     await asyncio.gather(
         bot.run_until_disconnected(),
