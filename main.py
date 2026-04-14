@@ -1,7 +1,6 @@
 import config
 import asyncio
 import time
-import logging
 from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.tl import types, functions
@@ -9,42 +8,19 @@ from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
 # ==========================================
-# LOGGING (PRO)
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-# ==========================================
-# LOOP SETUP
+# SETUP
 # ==========================================
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-# ==========================================
-# CLIENTS
-# ==========================================
-bot = TelegramClient(
-    "bot_session",
-    config.API_ID,
-    config.API_HASH,
-    loop=loop
-)
+bot = TelegramClient('bot_session', config.API_ID, config.API_HASH, loop=loop)
+assistant = TelegramClient(StringSession(config.SESSION_STRING), config.API_ID, config.API_HASH, loop=loop)
 
-assistant = TelegramClient(
-    StringSession(config.SESSION_STRING),
-    config.API_ID,
-    config.API_HASH,
-    loop=loop
-)
-
-# ==========================================
-# GLOBALS
-# ==========================================
 assistant_id = None
 bot_id = None
 last_refresh = 0
+
+# FIX 1: define active_calls
 active_calls = {}
 
 # ==========================================
@@ -53,18 +29,18 @@ active_calls = {}
 async def get_entity_safe(peer):
     try:
         return await assistant.get_input_entity(peer)
-    except Exception:
+    except:
         try:
             if isinstance(peer, types.PeerUser):
                 return await assistant.get_entity(int(peer.user_id))
             elif isinstance(peer, int):
                 return await assistant.get_entity(peer)
         except Exception as e:
-            logging.error(f"[ENTITY ERROR] {e}")
+            print(f"[ENTITY ERROR] {e}")
             return None
 
 # ==========================================
-# REFRESH VC CACHE
+# REFRESH CACHE
 # ==========================================
 async def refresh_cache(call):
     global last_refresh
@@ -78,16 +54,16 @@ async def refresh_cache(call):
                 call=call,
                 ids=[],
                 sources=[],
-                offset="",
+                offset='',
                 limit=100
             ))
             last_refresh = time.time()
-            logging.info("[CACHE] Refreshed VC participants")
+            print("[CACHE] VC participants refreshed")
         except Exception as e:
-            logging.error(f"[CACHE ERROR] {e}")
+            print(f"[CACHE ERROR] {e}")
 
 # ==========================================
-# SAFE MUTE / UNMUTE
+# SAFE EDIT
 # ==========================================
 async def safe_edit(call, peer, mute=True):
     if not call:
@@ -106,34 +82,33 @@ async def safe_edit(call, peer, mute=True):
             muted=mute
         ))
 
-        logging.info(f"[{'MUTED' if mute else 'UNMUTED'}] {peer}")
+        print(f"[{'MUTED' if mute else 'UNMUTED'}] {peer}")
 
     except FloodWaitError as e:
-        logging.warning(f"[FLOOD] Sleeping {e.seconds}s")
+        print(f"[FLOOD] Wait {e.seconds}s")
         await asyncio.sleep(e.seconds)
         return await safe_edit(call, peer, mute)
 
     except Exception as e:
-        logging.error(f"[EDIT ERROR] {e}")
+        print(f"[ERROR] Edit failed: {e}")
 
 # ==========================================
-# VC PARTICIPANT HANDLER
+# VC HANDLER
 # ==========================================
 @assistant.on(events.Raw(types.UpdateGroupCallParticipants))
 async def vc_join_handler(event):
-    try:
-        call = event.call
-        active_calls[str(config.GROUP_ID)] = call
+    call = event.call
 
-        for participant in event.participants:
-            if participant.left:
-                continue
+    # store call
+    active_calls[config.GROUP_ID] = call
 
+    for participant in event.participants:
+        if not participant.left:
             peer_obj = participant.peer
 
-            # ===== CHANNEL AUTO MUTE =====
+            # --- FEATURE 2: PERMANENT CHANNEL MUTE ---
             if isinstance(peer_obj, types.PeerChannel):
-                logging.info(f"[CHANNEL] {peer_obj.channel_id} → Muting")
+                print(f"[FEATURE 2] Channel detected (ID: {peer_obj.channel_id}) → muting")
 
                 try:
                     await assistant(functions.phone.EditGroupCallParticipantRequest(
@@ -141,15 +116,37 @@ async def vc_join_handler(event):
                         participant=peer_obj,
                         muted=True
                     ))
-                    logging.info(f"[SUCCESS] Channel muted")
+                    print(f"[SUCCESS] Channel {peer_obj.channel_id} muted")
+
+                except ValueError:
+                    print(f"[CACHE REFRESH] Unknown channel {peer_obj.channel_id}")
+
+                    try:
+                        await assistant(functions.phone.GetGroupParticipantsRequest(
+                            call=call,
+                            ids=[],
+                            sources=[],
+                            offset='',
+                            limit=100
+                        ))
+
+                        await assistant(functions.phone.EditGroupCallParticipantRequest(
+                            call=call,
+                            participant=peer_obj,
+                            muted=True
+                        ))
+
+                        print(f"[SUCCESS] Channel {peer_obj.channel_id} muted after refresh")
+
+                    except Exception as e:
+                        print(f"[ERROR] Channel mute failed: {e}")
 
                 except Exception as e:
-                    logging.warning(f"[CHANNEL ERROR] {e}")
-                    await refresh_cache(call)
+                    print(f"[ERROR] Failed to mute channel: {e}")
 
                 continue
 
-            # ===== USER CHECK =====
+            # ===== USER =====
             if isinstance(peer_obj, types.PeerUser):
                 user_id = peer_obj.user_id
 
@@ -161,85 +158,77 @@ async def vc_join_handler(event):
                         channel=config.GROUP_ID,
                         participant=user_id
                     ))
-                    logging.info(f"[MEMBER] {user_id}")
+                    print(f"[OK] {user_id} is member")
 
-                except Exception:
-                    logging.warning(f"[INTRUDER] {user_id} → Muting")
+                except:
+                    print(f"[INTRUDER] {user_id} → Muting")
                     await safe_edit(call, peer_obj, True)
 
-    except Exception as e:
-        logging.error(f"[VC HANDLER ERROR] {e}")
-
 # ==========================================
-# AUTO UNMUTE ON JOIN
+# AUTO UNMUTE
 # ==========================================
 @bot.on(events.ChatAction(chats=config.GROUP_ID))
 async def group_join_handler(event):
-    try:
-        if not (event.user_joined or event.user_added):
-            return
-
+    if event.user_joined or event.user_added:
         user_id = event.user_id
-        logging.info(f"[JOIN] {user_id}")
 
-        full_chat = await assistant(functions.channels.GetFullChannelRequest(config.GROUP_ID))
-        call = full_chat.full_chat.call
+        print(f"[JOIN] {user_id}")
 
-        if not call:
-            return
+        try:
+            full_chat = await assistant(functions.channels.GetFullChannelRequest(config.GROUP_ID))
+            call = full_chat.full_chat.call
 
-        entity = await get_entity_safe(user_id)
-        if not entity:
-            return
+            if not call:
+                return
 
-        await safe_edit(call, entity, False)
+            entity = await get_entity_safe(user_id)
+            if not entity:
+                return
 
-    except Exception as e:
-        logging.error(f"[UNMUTE ERROR] {e}")
+            print(f"[UNMUTE] {user_id}")
+            await safe_edit(call, entity, False)
+
+        except Exception as e:
+            print(f"[UNMUTE ERROR] {e}")
 
 # ==========================================
-# WEB SERVER (KEEP ALIVE)
+# WEB SERVER (Heroku keep alive)
 # ==========================================
 async def web_server():
     async def handle(request):
-        return web.Response(text="VC Bot Running ✅")
+        return web.Response(text="VC Bot Running")
 
     app = web.Application()
-    app.router.add_get("/", handle)
+    app.add_routes([web.get('/', handle)])
 
     runner = web.AppRunner(app)
     await runner.setup()
 
-    site = web.TCPSite(runner, "0.0.0.0", config.PORT)
+    site = web.TCPSite(runner, '0.0.0.0', config.PORT)
     await site.start()
 
-    logging.info(f"[WEB] Running on port {config.PORT}")
-
 # ==========================================
-# MAIN START
+# START
 # ==========================================
 async def main():
     global assistant_id, bot_id
 
     await bot.start(bot_token=config.BOT_TOKEN)
     bot_id = (await bot.get_me()).id
-    logging.info("Bot started")
+    print("Bot started")
 
     await assistant.start()
     assistant_id = (await assistant.get_me()).id
-    logging.info("Assistant started")
+    print("Assistant started")
 
     await web_server()
 
-    logging.info("🛡️ VC AUTO MUTE SYSTEM ACTIVE 🛡️")
+    print("🛡️ VC AUTO MUTE SYSTEM ACTIVE 🛡️")
 
     await asyncio.gather(
         bot.run_until_disconnected(),
         assistant.run_until_disconnected()
     )
 
-# ==========================================
-# ENTRY
-# ==========================================
 if __name__ == "__main__":
     loop.run_until_complete(main())
