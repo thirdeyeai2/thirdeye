@@ -30,6 +30,7 @@ last_refresh = 0
 
 active_calls = {}
 muted_users = {}
+video_state = {}
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -39,16 +40,13 @@ async def get_entity_safe(peer):
         return await assistant.get_input_entity(peer)
     except:
         try:
-            if isinstance(peer, types.PeerUser):
-                return await assistant.get_entity(int(peer.user_id))
-            elif isinstance(peer, int):
-                return await assistant.get_entity(peer)
+            return await assistant.get_entity(peer)
         except Exception as e:
             print(f"[ENTITY ERROR] {e}")
             return None
 
 # ==========================================
-# REFRESH CACHE (FAST)
+# REFRESH CACHE
 # ==========================================
 async def refresh_cache(call):
     global last_refresh
@@ -56,7 +54,7 @@ async def refresh_cache(call):
     if not call:
         return
 
-    if time.time() - last_refresh > 2:  # ⚡ faster refresh
+    if time.time() - last_refresh > 2:
         try:
             await assistant(functions.phone.GetGroupParticipantsRequest(
                 call=call,
@@ -77,20 +75,15 @@ async def safe_edit(call, peer, mute=True):
         return
 
     user_id = None
-
     if isinstance(peer, types.PeerUser):
         user_id = peer.user_id
-    elif isinstance(peer, int):
-        user_id = peer
 
-    # 🔥 Anti duplicate
+    # ⚡ reduced cooldown (allows re-mute)
     if mute and user_id:
         now = time.time()
-
         if user_id in muted_users:
-            if now - muted_users[user_id] < 3:  # ⚡ ultra fast cooldown
+            if now - muted_users[user_id] < 1:
                 return
-
         muted_users[user_id] = now
 
     try:
@@ -104,7 +97,7 @@ async def safe_edit(call, peer, mute=True):
             muted=mute
         ))
 
-        print(f"[MUTED] {user_id}")
+        print(f"[MUTED] {user_id if user_id else peer}")
 
     except FloodWaitError as e:
         await asyncio.sleep(e.seconds)
@@ -119,6 +112,8 @@ async def vc_handler(event):
     call = event.call
     active_calls[str(config.GROUP_ID)] = call
 
+    await refresh_cache(call)
+
     for participant in event.participants:
         if participant.left:
             continue
@@ -128,7 +123,7 @@ async def vc_handler(event):
         # ===== CHANNEL =====
         if isinstance(peer, types.PeerChannel):
             try:
-                entity = await assistant.get_input_entity(peer.channel_id)
+                entity = await assistant.get_entity(peer.channel_id)
 
                 await assistant(functions.phone.EditGroupCallParticipantRequest(
                     call=call,
@@ -136,9 +131,9 @@ async def vc_handler(event):
                     muted=True
                 ))
 
-                print("[CHANNEL MUTED]")
-            except:
-                pass
+                print(f"[CHANNEL MUTED] {peer.channel_id}")
+            except Exception as e:
+                print(f"[CHANNEL ERROR] {e}")
             continue
 
         # ===== USER =====
@@ -162,26 +157,38 @@ async def vc_handler(event):
                 )):
                     is_admin = True
             except:
+                print(f"[INTRUDER] {user_id}")
                 await safe_edit(call, peer, True)
                 continue
 
-            # VIDEO / SCREEN
-            video = hasattr(participant, "video") and participant.video
-            screen = hasattr(participant, "presentation") and participant.presentation
+            # 🎥 VIDEO / SCREEN DETECTION
+            video = getattr(participant, "video", None) is not None
+            screen = getattr(participant, "presentation", None) is not None
+
+            key = str(user_id)
 
             if (video or screen) and not is_admin:
+                # 🔁 continuous enforcement
+                print(f"[VIDEO/SCREEN ON] {user_id}")
+                video_state[key] = "on"
                 await safe_edit(call, peer, True)
 
+            else:
+                # reset when off
+                video_state[key] = "off"
+
 # ==========================================
-# ULTRA FAST MONITOR LOOP
+# MONITOR LOOP (ULTRA FAST)
 # ==========================================
 async def monitor_vc():
     while True:
         try:
             call = active_calls.get(str(config.GROUP_ID))
             if not call:
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 continue
+
+            await refresh_cache(call)
 
             result = await assistant(functions.phone.GetGroupParticipantsRequest(
                 call=call,
@@ -194,13 +201,29 @@ async def monitor_vc():
             for participant in result.participants:
                 peer = participant.peer
 
+                # ===== CHANNEL =====
+                if isinstance(peer, types.PeerChannel):
+                    try:
+                        entity = await assistant.get_entity(peer.channel_id)
+
+                        await assistant(functions.phone.EditGroupCallParticipantRequest(
+                            call=call,
+                            participant=entity,
+                            muted=True
+                        ))
+
+                        print(f"[FORCE CHANNEL MUTE] {peer.channel_id}")
+                    except:
+                        pass
+                    continue
+
+                # ===== USER =====
                 if isinstance(peer, types.PeerUser):
                     user_id = peer.user_id
 
                     if user_id in [assistant_id, bot_id]:
                         continue
 
-                    # ADMIN CHECK
                     is_admin = False
                     try:
                         p = await assistant(functions.channels.GetParticipantRequest(
@@ -216,16 +239,22 @@ async def monitor_vc():
                     except:
                         continue
 
-                    video = hasattr(participant, "video") and participant.video
-                    screen = hasattr(participant, "presentation") and participant.presentation
+                    video = getattr(participant, "video", None) is not None
+                    screen = getattr(participant, "presentation", None) is not None
+
+                    key = str(user_id)
 
                     if (video or screen) and not is_admin:
+                        print(f"[FORCE VIDEO MUTE] {user_id}")
+                        video_state[key] = "on"
                         await safe_edit(call, peer, True)
+                    else:
+                        video_state[key] = "off"
 
         except Exception as e:
             print(f"[MONITOR ERROR] {e}")
 
-        await asyncio.sleep(2)  # ⚡ ultra fast loop
+        await asyncio.sleep(1)
 
 # ==========================================
 # WEB SERVER
@@ -255,9 +284,12 @@ async def main():
     await assistant.start()
     assistant_id = (await assistant.get_me()).id
 
+    # 🔥 preload dialogs (important)
+    await assistant.get_dialogs()
+
     await web_server()
 
-    print("🔥 ULTRA FAST VC CONTROL ACTIVE 🔥")
+    print("🔥 CONTINUOUS VC CONTROL ACTIVE 🔥")
 
     asyncio.create_task(monitor_vc())
 
