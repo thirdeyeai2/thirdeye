@@ -143,8 +143,10 @@ async def vc_handler(event):
             if user_id in [assistant_id, bot_id]:
                 continue
 
-            # ADMIN CHECK
+            # ADMIN / MEMBER CHECK
             is_admin = False
+            is_member = True
+
             try:
                 p = await assistant(functions.channels.GetParticipantRequest(
                     channel=config.GROUP_ID,
@@ -156,29 +158,31 @@ async def vc_handler(event):
                     types.ChannelParticipantCreator
                 )):
                     is_admin = True
+
             except:
+                is_member = False
+
+            # 🚨 INTRUDER
+            if not is_member:
                 print(f"[INTRUDER] {user_id}")
                 await safe_edit(call, peer, True)
                 continue
 
-            # 🎥 VIDEO / SCREEN DETECTION
+            # 🎥 VIDEO / SCREEN
             video = getattr(participant, "video", None) is not None
             screen = getattr(participant, "presentation", None) is not None
 
             key = str(user_id)
 
             if (video or screen) and not is_admin:
-                # 🔁 continuous enforcement
                 print(f"[VIDEO/SCREEN ON] {user_id}")
                 video_state[key] = "on"
                 await safe_edit(call, peer, True)
-
             else:
-                # reset when off
                 video_state[key] = "off"
 
 # ==========================================
-# MONITOR LOOP (ULTRA FAST)
+# MONITOR LOOP (ULTRA FAST + FINAL FIX)
 # ==========================================
 async def monitor_vc():
     while True:
@@ -225,6 +229,8 @@ async def monitor_vc():
                         continue
 
                     is_admin = False
+                    is_member = True
+
                     try:
                         p = await assistant(functions.channels.GetParticipantRequest(
                             channel=config.GROUP_ID,
@@ -236,9 +242,17 @@ async def monitor_vc():
                             types.ChannelParticipantCreator
                         )):
                             is_admin = True
+
                     except:
+                        is_member = False
+
+                    # 🚨 INTRUDER LOOP FIX
+                    if not is_member:
+                        print(f"[FORCE INTRUDER MUTE] {user_id}")
+                        await safe_edit(call, peer, True)
                         continue
 
+                    # 🎥 VIDEO / SCREEN LOOP
                     video = getattr(participant, "video", None) is not None
                     screen = getattr(participant, "presentation", None) is not None
 
@@ -284,12 +298,12 @@ async def main():
     await assistant.start()
     assistant_id = (await assistant.get_me()).id
 
-    # 🔥 preload dialogs (important)
+    # 🔥 IMPORTANT
     await assistant.get_dialogs()
 
     await web_server()
 
-    print("🔥 CONTINUOUS VC CONTROL ACTIVE 🔥")
+    print("🔥 ABSOLUTE VC CONTROL ACTIVE 🔥")
 
     asyncio.create_task(monitor_vc())
 
