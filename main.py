@@ -29,6 +29,7 @@ bot_id = None
 last_refresh = 0
 
 active_calls = {}
+muted_users = {}
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -47,7 +48,7 @@ async def get_entity_safe(peer):
             return None
 
 # ==========================================
-# REFRESH CACHE
+# REFRESH CACHE (FAST)
 # ==========================================
 async def refresh_cache(call):
     global last_refresh
@@ -55,7 +56,7 @@ async def refresh_cache(call):
     if not call:
         return
 
-    if time.time() - last_refresh > 5:
+    if time.time() - last_refresh > 2:  # ⚡ faster refresh
         try:
             await assistant(functions.phone.GetGroupParticipantsRequest(
                 call=call,
@@ -65,20 +66,34 @@ async def refresh_cache(call):
                 limit=100
             ))
             last_refresh = time.time()
-            print("[CACHE] VC participants refreshed")
         except Exception as e:
             print(f"[CACHE ERROR] {e}")
 
 # ==========================================
-# SAFE MUTE / UNMUTE
+# SAFE MUTE (ANTI-SPAM)
 # ==========================================
 async def safe_edit(call, peer, mute=True):
     if not call:
         return
 
-    try:
-        await refresh_cache(call)
+    user_id = None
 
+    if isinstance(peer, types.PeerUser):
+        user_id = peer.user_id
+    elif isinstance(peer, int):
+        user_id = peer
+
+    # 🔥 Anti duplicate
+    if mute and user_id:
+        now = time.time()
+
+        if user_id in muted_users:
+            if now - muted_users[user_id] < 3:  # ⚡ ultra fast cooldown
+                return
+
+        muted_users[user_id] = now
+
+    try:
         entity = await get_entity_safe(peer)
         if not entity:
             return
@@ -89,40 +104,31 @@ async def safe_edit(call, peer, mute=True):
             muted=mute
         ))
 
-        print(f"[{'MUTED' if mute else 'UNMUTED'}] {peer}")
+        print(f"[MUTED] {user_id}")
 
     except FloodWaitError as e:
-        print(f"[FLOOD] Wait {e.seconds}s")
         await asyncio.sleep(e.seconds)
-        return await safe_edit(call, peer, mute)
-
     except Exception as e:
-        print(f"[ERROR] Edit failed: {e}")
+        print(f"[ERROR] {e}")
 
 # ==========================================
-# VC HANDLER
+# VC EVENT HANDLER
 # ==========================================
 @assistant.on(events.Raw(types.UpdateGroupCallParticipants))
-async def vc_join_handler(event):
+async def vc_handler(event):
     call = event.call
-
     active_calls[str(config.GROUP_ID)] = call
-
-    # 🔥 Ensure cache is fresh
-    await refresh_cache(call)
 
     for participant in event.participants:
         if participant.left:
             continue
 
-        peer_obj = participant.peer
+        peer = participant.peer
 
-        # ===== CHANNEL AUTO MUTE (FIXED) =====
-        if isinstance(peer_obj, types.PeerChannel):
-            print(f"[CHANNEL] {peer_obj.channel_id} → Muting")
-
+        # ===== CHANNEL =====
+        if isinstance(peer, types.PeerChannel):
             try:
-                entity = await assistant.get_input_entity(peer_obj.channel_id)
+                entity = await assistant.get_input_entity(peer.channel_id)
 
                 await assistant(functions.phone.EditGroupCallParticipantRequest(
                     call=call,
@@ -130,37 +136,19 @@ async def vc_join_handler(event):
                     muted=True
                 ))
 
-                print("[SUCCESS] Channel muted")
-
-            except Exception as e:
-                print(f"[CHANNEL ERROR] {e}")
-
-                try:
-                    await refresh_cache(call)
-
-                    entity = await assistant.get_input_entity(peer_obj.channel_id)
-
-                    await assistant(functions.phone.EditGroupCallParticipantRequest(
-                        call=call,
-                        participant=entity,
-                        muted=True
-                    ))
-
-                    print("[SUCCESS] Channel muted after refresh")
-
-                except Exception as e:
-                    print(f"[FINAL FAIL] {e}")
-
+                print("[CHANNEL MUTED]")
+            except:
+                pass
             continue
 
         # ===== USER =====
-        if isinstance(peer_obj, types.PeerUser):
-            user_id = peer_obj.user_id
+        if isinstance(peer, types.PeerUser):
+            user_id = peer.user_id
 
             if user_id in [assistant_id, bot_id]:
                 continue
 
-            # 🔍 ADMIN CHECK
+            # ADMIN CHECK
             is_admin = False
             try:
                 p = await assistant(functions.channels.GetParticipantRequest(
@@ -173,35 +161,78 @@ async def vc_join_handler(event):
                     types.ChannelParticipantCreator
                 )):
                     is_admin = True
-
             except:
-                print(f"[INTRUDER] {user_id} → Muting")
-                await safe_edit(call, peer_obj, True)
+                await safe_edit(call, peer, True)
                 continue
 
-            # 🎥 VIDEO / SCREEN SHARE DETECTION (FIXED)
-            video_on = False
-            screen_on = False
+            # VIDEO / SCREEN
+            video = hasattr(participant, "video") and participant.video
+            screen = hasattr(participant, "presentation") and participant.presentation
 
-            if hasattr(participant, "video") and participant.video:
-                video_on = True
-
-            if hasattr(participant, "presentation") and participant.presentation:
-                screen_on = True
-
-            if (video_on or screen_on) and not is_admin:
-                print(f"[MEDIA BLOCK] {user_id} → Muting")
-                await safe_edit(call, peer_obj, True)
-                continue
-
-            print(f"[OK] {user_id} is member")
+            if (video or screen) and not is_admin:
+                await safe_edit(call, peer, True)
 
 # ==========================================
-# WEB SERVER (KEEP ALIVE)
+# ULTRA FAST MONITOR LOOP
+# ==========================================
+async def monitor_vc():
+    while True:
+        try:
+            call = active_calls.get(str(config.GROUP_ID))
+            if not call:
+                await asyncio.sleep(2)
+                continue
+
+            result = await assistant(functions.phone.GetGroupParticipantsRequest(
+                call=call,
+                ids=[],
+                sources=[],
+                offset='',
+                limit=100
+            ))
+
+            for participant in result.participants:
+                peer = participant.peer
+
+                if isinstance(peer, types.PeerUser):
+                    user_id = peer.user_id
+
+                    if user_id in [assistant_id, bot_id]:
+                        continue
+
+                    # ADMIN CHECK
+                    is_admin = False
+                    try:
+                        p = await assistant(functions.channels.GetParticipantRequest(
+                            channel=config.GROUP_ID,
+                            participant=user_id
+                        ))
+
+                        if isinstance(p.participant, (
+                            types.ChannelParticipantAdmin,
+                            types.ChannelParticipantCreator
+                        )):
+                            is_admin = True
+                    except:
+                        continue
+
+                    video = hasattr(participant, "video") and participant.video
+                    screen = hasattr(participant, "presentation") and participant.presentation
+
+                    if (video or screen) and not is_admin:
+                        await safe_edit(call, peer, True)
+
+        except Exception as e:
+            print(f"[MONITOR ERROR] {e}")
+
+        await asyncio.sleep(2)  # ⚡ ultra fast loop
+
+# ==========================================
+# WEB SERVER
 # ==========================================
 async def web_server():
     async def handle(request):
-        return web.Response(text="VC Bot Running ✅")
+        return web.Response(text="VC Bot Running")
 
     app = web.Application()
     app.add_routes([web.get('/', handle)])
@@ -213,22 +244,22 @@ async def web_server():
     await site.start()
 
 # ==========================================
-# START
+# MAIN
 # ==========================================
 async def main():
     global assistant_id, bot_id
 
     await bot.start(bot_token=config.BOT_TOKEN)
     bot_id = (await bot.get_me()).id
-    print("Bot started")
 
     await assistant.start()
     assistant_id = (await assistant.get_me()).id
-    print("Assistant started")
 
     await web_server()
 
-    print("🛡️ VC AUTO CONTROL SYSTEM ACTIVE 🛡️")
+    print("🔥 ULTRA FAST VC CONTROL ACTIVE 🔥")
+
+    asyncio.create_task(monitor_vc())
 
     await asyncio.gather(
         bot.run_until_disconnected(),
