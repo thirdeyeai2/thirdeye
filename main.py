@@ -14,6 +14,7 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 bot = TelegramClient('bot_session', config.API_ID, config.API_HASH, loop=loop)
+
 assistant = TelegramClient(
     StringSession(config.SESSION_STRING),
     config.API_ID,
@@ -31,6 +32,22 @@ last_refresh = 0
 active_calls = {}
 muted_users = {}
 video_state = {}
+
+# ==========================================
+# LOG SYSTEM
+# ==========================================
+async def send_log(text):
+    try:
+        await bot.send_message(config.LOG_CHANNEL, text)
+    except Exception as e:
+        print(f"[LOG ERROR] {e}")
+
+async def get_user_name(user_id):
+    try:
+        user = await assistant.get_entity(user_id)
+        return f"{user.first_name or ''} {user.last_name or ''}".strip()
+    except:
+        return "Unknown"
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -68,9 +85,9 @@ async def refresh_cache(call):
             print(f"[CACHE ERROR] {e}")
 
 # ==========================================
-# SAFE MUTE (ANTI-SPAM)
+# SAFE MUTE / UNMUTE
 # ==========================================
-async def safe_edit(call, peer, mute=True):
+async def safe_edit(call, peer, mute=True, reason=""):
     if not call:
         return
 
@@ -78,7 +95,7 @@ async def safe_edit(call, peer, mute=True):
     if isinstance(peer, types.PeerUser):
         user_id = peer.user_id
 
-    # ⚡ reduced cooldown (allows re-mute)
+    # anti spam
     if mute and user_id:
         now = time.time()
         if user_id in muted_users:
@@ -96,6 +113,17 @@ async def safe_edit(call, peer, mute=True):
             participant=entity,
             muted=mute
         ))
+
+        if mute:
+            name = await get_user_name(user_id) if user_id else "Channel"
+            await send_log(f"""
+🚫 VC ACTION
+
+👤 Name: {name}
+🆔 ID: {user_id if user_id else 'CHANNEL'}
+⚠️ Action: MUTED
+📌 Reason: {reason}
+""")
 
         print(f"[MUTED] {user_id if user_id else peer}")
 
@@ -120,18 +148,23 @@ async def vc_handler(event):
 
         peer = participant.peer
 
-        # ===== CHANNEL =====
+        # ===== CHANNEL (FIXED) =====
         if isinstance(peer, types.PeerChannel):
             try:
                 entity = await assistant.get_entity(peer.channel_id)
-
                 await assistant(functions.phone.EditGroupCallParticipantRequest(
                     call=call,
                     participant=entity,
                     muted=True
                 ))
+                await send_log(f"""
+🚫 VC ACTION
 
-                print(f"[CHANNEL MUTED] {peer.channel_id}")
+👤 Name: Channel
+🆔 ID: {peer.channel_id}
+⚠️ Action: MUTED
+📌 Reason: Channel joined VC
+""")
             except Exception as e:
                 print(f"[CHANNEL ERROR] {e}")
             continue
@@ -143,7 +176,6 @@ async def vc_handler(event):
             if user_id in [assistant_id, bot_id]:
                 continue
 
-            # ADMIN / MEMBER CHECK
             is_admin = False
             is_member = True
 
@@ -164,8 +196,7 @@ async def vc_handler(event):
 
             # 🚨 INTRUDER
             if not is_member:
-                print(f"[INTRUDER] {user_id}")
-                await safe_edit(call, peer, True)
+                await safe_edit(call, peer, True, "Non-member (Intruder)")
                 continue
 
             # 🎥 VIDEO / SCREEN
@@ -175,14 +206,14 @@ async def vc_handler(event):
             key = str(user_id)
 
             if (video or screen) and not is_admin:
-                print(f"[VIDEO/SCREEN ON] {user_id}")
                 video_state[key] = "on"
-                await safe_edit(call, peer, True)
+                reason = "Video ON" if video else "Screen Share ON"
+                await safe_edit(call, peer, True, reason)
             else:
                 video_state[key] = "off"
 
 # ==========================================
-# MONITOR LOOP (ULTRA FAST + FINAL FIX)
+# MONITOR LOOP (FULL ENFORCEMENT)
 # ==========================================
 async def monitor_vc():
     while True:
@@ -205,7 +236,7 @@ async def monitor_vc():
             for participant in result.participants:
                 peer = participant.peer
 
-                # ===== CHANNEL =====
+                # ===== CHANNEL (FIXED) =====
                 if isinstance(peer, types.PeerChannel):
                     try:
                         entity = await assistant.get_entity(peer.channel_id)
@@ -248,8 +279,7 @@ async def monitor_vc():
 
                     # 🚨 INTRUDER LOOP FIX
                     if not is_member:
-                        print(f"[FORCE INTRUDER MUTE] {user_id}")
-                        await safe_edit(call, peer, True)
+                        await safe_edit(call, peer, True, "Non-member (Intruder)")
                         continue
 
                     # 🎥 VIDEO / SCREEN LOOP
@@ -259,9 +289,9 @@ async def monitor_vc():
                     key = str(user_id)
 
                     if (video or screen) and not is_admin:
-                        print(f"[FORCE VIDEO MUTE] {user_id}")
                         video_state[key] = "on"
-                        await safe_edit(call, peer, True)
+                        reason = "Video ON" if video else "Screen Share ON"
+                        await safe_edit(call, peer, True, reason)
                     else:
                         video_state[key] = "off"
 
@@ -269,6 +299,44 @@ async def monitor_vc():
             print(f"[MONITOR ERROR] {e}")
 
         await asyncio.sleep(1)
+
+# ==========================================
+# AUTO UNMUTE
+# ==========================================
+@bot.on(events.ChatAction(chats=config.GROUP_ID))
+async def auto_unmute(event):
+    if event.user_joined or event.user_added:
+        user_id = event.user_id
+
+        call = active_calls.get(str(config.GROUP_ID))
+        if not call:
+            return
+
+        try:
+            entity = await get_entity_safe(user_id)
+            if not entity:
+                return
+
+            await assistant(functions.phone.EditGroupCallParticipantRequest(
+                call=call,
+                participant=entity,
+                muted=False
+            ))
+
+            name = await get_user_name(user_id)
+
+            await send_log(f"""
+✅ AUTO UNMUTE
+
+👤 Name: {name}
+🆔 ID: {user_id}
+📌 Reason: Joined group
+""")
+
+            print(f"[AUTO UNMUTED] {user_id}")
+
+        except Exception as e:
+            print(f"[UNMUTE ERROR] {e}")
 
 # ==========================================
 # WEB SERVER
@@ -298,12 +366,11 @@ async def main():
     await assistant.start()
     assistant_id = (await assistant.get_me()).id
 
-    # 🔥 IMPORTANT
     await assistant.get_dialogs()
 
     await web_server()
 
-    print("🔥 ABSOLUTE VC CONTROL ACTIVE 🔥")
+    print("🔥 FINAL VC CONTROL SYSTEM ACTIVE 🔥")
 
     asyncio.create_task(monitor_vc())
 
