@@ -64,8 +64,7 @@ async def get_entity_safe(peer):
             print(f"[ENTITY ERROR] {e}")
             return None
 
-#
-==========================================
+# ==========================================
 # GET ACTIVE CALL (VC RESTART FIX)
 # ==========================================
 async def get_active_call():
