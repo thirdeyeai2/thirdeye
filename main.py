@@ -105,44 +105,55 @@ async def safe_edit(call, peer, mute=True, reason=""):
     if not call:
         return
 
-    key = None
     user_id = None
+    key = None
 
     if isinstance(peer, types.PeerUser):
         user_id = peer.user_id
-        key = f"{user_id}_{reason}"
+        key = f"user_{user_id}"
 
     elif isinstance(peer, types.PeerChannel):
         key = f"channel_{peer.channel_id}"
 
-    now = time.time()
-    if key:
+    if not key:
+        return
+
+    # 🔥 CREATE LOCK PER USER
+    if key not in user_locks:
+        user_locks[key] = asyncio.Lock()
+
+    async with user_locks[key]:
+
+        now = time.time()
+
+        # 🔥 HARD COOLDOWN
         if key in action_cooldown:
             if now - action_cooldown[key] < 3:
                 return
+
         action_cooldown[key] = now
 
-    try:
-        entity = await get_entity_safe(peer)
-        if not entity:
-            return
+        try:
+            entity = await get_entity_safe(peer)
+            if not entity:
+                return
 
-        await assistant(functions.phone.EditGroupCallParticipantRequest(
-            call=call,
-            participant=entity,
-            muted=mute
-        ))
+            await assistant(functions.phone.EditGroupCallParticipantRequest(
+                call=call,
+                participant=entity,
+                muted=mute
+            ))
 
-        if mute:
-            if isinstance(peer, types.PeerChannel):
-                name = "Channel"
-                username = "-"
-                uid = peer.channel_id
-            else:
-                name, username = await get_user_name(user_id)
-                uid = user_id
+            if mute:
+                if isinstance(peer, types.PeerChannel):
+                    name = "Channel"
+                    username = "-"
+                    uid = peer.channel_id
+                else:
+                    name, username = await get_user_name(user_id)
+                    uid = user_id
 
-            await send_log(f"""
+                await send_log(f"""
 🚫 VC ACTION
 
 👤 Name: {name}
@@ -152,12 +163,12 @@ async def safe_edit(call, peer, mute=True, reason=""):
 📌 Reason: {reason}
 """)
 
-        print(f"[MUTED] {user_id if user_id else peer}")
+            print(f"[MUTED] {user_id if user_id else peer}")
 
-    except FloodWaitError as e:
-        await asyncio.sleep(e.seconds)
-    except Exception as e:
-        print(f"[ERROR] {e}")
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds)
+        except Exception as e:
+            print(f"[ERROR] {e}")
 
 # ==========================================
 # VC EVENT HANDLER
