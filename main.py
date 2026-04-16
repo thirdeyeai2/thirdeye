@@ -33,6 +33,7 @@ active_calls = {}
 muted_users = {}
 video_state = {}
 action_cooldown = {}
+user_locks = {}
 
 # ==========================================
 # LOG SYSTEM
