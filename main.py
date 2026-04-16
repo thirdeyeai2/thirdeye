@@ -32,6 +32,7 @@ last_refresh = 0
 active_calls = {}
 muted_users = {}
 video_state = {}
+action_cooldown = {}
 
 # ==========================================
 # LOG SYSTEM
@@ -45,9 +46,10 @@ async def send_log(text):
 async def get_user_name(user_id):
     try:
         user = await assistant.get_entity(user_id)
-        return f"{user.first_name or ''} {user.last_name or ''}".strip()
+        username = f"@{user.username}" if user.username else "NoUsername"
+        return f"{user.first_name or ''} {user.last_name or ''}".strip(), username
     except:
-        return "Unknown"
+        return "Unknown", "NoUsername"
 
 # ==========================================
 # SAFE ENTITY FETCH
@@ -61,6 +63,19 @@ async def get_entity_safe(peer):
         except Exception as e:
             print(f"[ENTITY ERROR] {e}")
             return None
+
+#
+==========================================
+# GET ACTIVE CALL (VC RESTART FIX)
+# ==========================================
+async def get_active_call():
+    try:
+        full = await assistant(functions.channels.GetFullChannelRequest(
+            channel=config.GROUP_ID
+        ))
+        return full.full_chat.call
+    except:
+        return None
 
 # ==========================================
 # REFRESH CACHE
@@ -85,23 +100,28 @@ async def refresh_cache(call):
             print(f"[CACHE ERROR] {e}")
 
 # ==========================================
-# SAFE MUTE / UNMUTE
+# SAFE MUTE / UNMUTE (ANTI-SPAM)
 # ==========================================
 async def safe_edit(call, peer, mute=True, reason=""):
     if not call:
         return
 
+    key = None
     user_id = None
+
     if isinstance(peer, types.PeerUser):
         user_id = peer.user_id
+        key = f"{user_id}_{reason}"
 
-    # anti spam
-    if mute and user_id:
-        now = time.time()
-        if user_id in muted_users:
-            if now - muted_users[user_id] < 1:
+    elif isinstance(peer, types.PeerChannel):
+        key = f"channel_{peer.channel_id}"
+
+    now = time.time()
+    if key:
+        if key in action_cooldown:
+            if now - action_cooldown[key] < 3:
                 return
-        muted_users[user_id] = now
+        action_cooldown[key] = now
 
     try:
         entity = await get_entity_safe(peer)
@@ -115,12 +135,20 @@ async def safe_edit(call, peer, mute=True, reason=""):
         ))
 
         if mute:
-            name = await get_user_name(user_id) if user_id else "Channel"
+            if isinstance(peer, types.PeerChannel):
+                name = "Channel"
+                username = "-"
+                uid = peer.channel_id
+            else:
+                name, username = await get_user_name(user_id)
+                uid = user_id
+
             await send_log(f"""
 🚫 VC ACTION
 
 👤 Name: {name}
-🆔 ID: {user_id if user_id else 'CHANNEL'}
+🔗 Username: {username}
+🆔 ID: {uid}
 ⚠️ Action: MUTED
 📌 Reason: {reason}
 """)
@@ -219,9 +247,14 @@ async def monitor_vc():
     while True:
         try:
             call = active_calls.get(str(config.GROUP_ID))
+
             if not call:
-                await asyncio.sleep(1)
-                continue
+                call = await get_active_call()
+                if call:
+                    active_calls[str(config.GROUP_ID)] = call
+                else:
+                    await asyncio.sleep(2)
+                    continue
 
             await refresh_cache(call)
 
@@ -234,6 +267,9 @@ async def monitor_vc():
             ))
 
             for participant in result.participants:
+                if participant.left:
+                    continue
+
                 peer = participant.peer
 
                 # ===== CHANNEL (FIXED) =====
@@ -323,12 +359,13 @@ async def auto_unmute(event):
                 muted=False
             ))
 
-            name = await get_user_name(user_id)
+            name, username = await get_user_name(user_id)
 
             await send_log(f"""
 ✅ AUTO UNMUTE
 
 👤 Name: {name}
+🔗 Username: {username}
 🆔 ID: {user_id}
 📌 Reason: Joined group
 """)
